@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="robots" content="noindex">
+    <title>Sign in</title>
+    <link rel="stylesheet" href="/assets/css/app.css">
+</head>
+<body>
+<div class="center-page">
+    <div class="container narrow">
+        <div class="card">
+            <h1 id="title">Sign in</h1>
+            <div class="tabs" role="tablist">
+                <button type="button" class="active" data-mode="password">Username</button>
+                <button type="button" data-mode="token">Access code</button>
+            </div>
+            <form id="login-form" class="stack" autocomplete="on" novalidate>
+                <div id="error" class="alert error hidden" role="alert"></div>
+
+                <div data-for="password">
+                    <div class="field">
+                        <label for="username">Username</label>
+                        <input id="username" name="username" type="text" autocomplete="username" autocapitalize="none" autocorrect="off">
+                    </div>
+                    <div class="field">
+                        <label for="password">Password</label>
+                        <input id="password" name="password" type="password" autocomplete="current-password">
+                    </div>
+                </div>
+
+                <div data-for="token" class="hidden">
+                    <div class="field">
+                        <label for="token">Access code</label>
+                        <input id="token" name="token" type="password" autocomplete="one-time-code" autocapitalize="none" autocorrect="off">
+                        <div class="hint">The code your administrator gave you.</div>
+                    </div>
+                </div>
+
+                <button type="submit" class="primary" id="submit">Sign in</button>
+            </form>
+        </div>
+    </div>
+</div>
+<script src="/assets/js/common.js"></script>
+<script src="/assets/js/login.js"></script>
+</body>
+</html>

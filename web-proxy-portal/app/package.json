@@ -1,0 +1,23 @@
+{
+  "name": "web-proxy-portal",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Self-hosted browser-based web proxy portal (Rammerhead engine) with upstream proxy pools, sticky sessions, script injection, auth, rate limiting and admin panel.",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start:web": "node src/web/server.js",
+    "start:proxy": "node src/proxy/server.js",
+    "migrate": "node src/cli/index.js migrate",
+    "cli": "node src/cli/index.js",
+    "test": "node --test --test-concurrency=1 \"test/**/*.test.js\""
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.10.0",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "socks": "^2.8.4"
+  }
+}

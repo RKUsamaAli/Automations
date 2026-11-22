@@ -1,0 +1,91 @@
+# =============================================================================
+# Web Proxy Portal - test, then deploy (or roll back) over SSH.
+#
+#  - push to main touching web-proxy-portal/**  -> tests, then `portal-deploy --ref <sha>`
+#  - Actions tab -> "Run workflow"              -> deploy any ref, or roll back
+#
+# Needs repository secrets DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY (DEPLOY_PORT optional).
+# Without them only the tests run. See web-proxy-portal/docs/DEPLOYMENT.md section 6.
+# =============================================================================
+name: web-proxy-portal
+
+on:
+  push:
+    branches: [main]
+    paths: ['web-proxy-portal/**', '.github/workflows/web-proxy-portal-deploy.yml']
+  pull_request:
+    paths: ['web-proxy-portal/**']
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'deploy or rollback'
+        type: choice
+        options: [deploy, rollback]
+        default: deploy
+      ref:
+        description: 'deploy: branch/tag/sha (empty = this commit). rollback: release name (empty = previous)'
+        required: false
+
+concurrency:
+  group: web-proxy-portal-deploy
+  cancel-in-progress: false
+
+jobs:
+  test:
+    if: github.event_name != 'workflow_dispatch' || inputs.action == 'deploy'
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: web-proxy-portal/app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web-proxy-portal/app/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - name: Shellcheck deploy scripts
+        working-directory: web-proxy-portal/deploy
+        run: shellcheck -x -S warning *.sh lib/*.sh tools/*.sh
+
+  deploy:
+    needs: test
+    if: always() && (needs.test.result == 'success' || needs.test.result == 'skipped') && github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    environment: production
+    env:
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+      DEPLOY_PORT: ${{ secrets.DEPLOY_PORT || '22' }}
+    steps:
+      - name: Skip when no server is configured
+        if: env.DEPLOY_HOST == ''
+        run: echo "DEPLOY_HOST secret not set - skipping deploy."
+
+      - name: Set up SSH
+        if: env.DEPLOY_HOST != ''
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_deploy && chmod 600 ~/.ssh/id_deploy
+          ssh-keyscan -p "$DEPLOY_PORT" "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Deploy or roll back
+        if: env.DEPLOY_HOST != ''
+        env:
+          ACTION: ${{ inputs.action || 'deploy' }}
+          REF_INPUT: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          if [ "$ACTION" = "rollback" ]; then
+            cmd="sudo /usr/local/bin/portal-rollback --yes"
+            [ -n "$REF_INPUT" ] && cmd="$cmd --to $(printf '%q' "$REF_INPUT")"
+          else
+            ref="${REF_INPUT:-$GITHUB_SHA}"
+            cmd="sudo /usr/local/bin/portal-deploy --ref $(printf '%q' "$ref")"
+          fi
+          echo "Running: $cmd"
+          ssh -i ~/.ssh/id_deploy -p "$DEPLOY_PORT" -o BatchMode=yes "$DEPLOY_USER@$DEPLOY_HOST" "$cmd"
