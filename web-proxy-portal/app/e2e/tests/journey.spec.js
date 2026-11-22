@@ -268,8 +268,11 @@ test.describe.serial('full product journey', () => {
     test('a session shows its proxy and can be switched to another one', async () => {
         await expect(phone).toHaveURL(S.appUrl + '/');
         // the session opened through "My proxies" shows that proxy (127.0.0.1:<port> in the test setup)
-        const own = phone.locator('#sessions li').filter({ has: phone.locator('.via-line', { hasText: 'My proxies' }) }).first();
-        await expect(own).toBeVisible();
+        const ownFirst = phone.locator('#sessions li').filter({ has: phone.locator('.via-line', { hasText: 'My proxies' }) }).first();
+        await expect(ownFirst).toBeVisible();
+        // pin the row by its session id (its text changes after the switch)
+        const sid = await ownFirst.locator('[data-proxy]').getAttribute('data-proxy');
+        const own = phone.locator('#sessions li').filter({ has: phone.locator(`[data-proxy="${sid}"]`) });
         await shot(phone, '15b-session-shows-proxy-iphone', { fullPage: false });
         await own.getByRole('button', { name: /Change the proxy/ }).click();
         const dialog = phone.getByRole('dialog', { name: 'Change proxy' });
