@@ -1,4 +1,5 @@
-/* Browse page: address bar + pool picker, sessions, quick access. */
+/* Browse page: search-engine style start page (search in the middle), the
+   connection switch (no proxy by default / a proxy pool) and sessions at the side. */
 (function () {
     'use strict';
     var P = window.Portal;
@@ -6,10 +7,15 @@
     var goError = P.$('#go-error');
     var poolsById = {};
     var siteList = [];
+    var serverSearch = true; // Google results via the server's browser (portal.searchServer)
 
+    /** 'direct' (proxy switch off), a pool id, or 'auto' (automatic proxy). */
     function selectedPool() {
-        var v = P.$('#pool').value;
-        return v || null;
+        if (!P.$('#proxy-on').checked) return 'direct';
+        return P.$('#pool').value || 'auto';
+    }
+    function goSearch(q) {
+        location.href = '/search?q=' + encodeURIComponent(q) + '&via=' + encodeURIComponent(selectedPool());
     }
     function hostOf(url) {
         try { return new URL(url).hostname; } catch (_) { return url || '-'; }
@@ -39,6 +45,8 @@
             return P.$('#url').focus();
         }
         P.$('#url').removeAttribute('aria-invalid');
+        // words -> results page (Google via the server's browser); an address -> that site
+        if (serverSearch && !LOOKS_LIKE_URL.test(url)) return goSearch(url);
         browse({ url: url }, P.$('#go'));
     });
     P.$('#refresh').addEventListener('click', loadSessions);
@@ -74,26 +82,42 @@
         },
         onPick: function (item) {
             P.$('#url').value = item.value;
+            if (serverSearch && !item.siteId && !LOOKS_LIKE_URL.test(item.value)) return goSearch(item.value);
             browse(item.siteId ? { siteId: item.siteId } : { url: item.value }, P.$('#go'));
         }
     });
 
-    async function loadPools() {
+    /**
+     * Connection: the "Use a proxy" switch (off = the server's own connection,
+     * the default) and, when on, which pool. Remembered per browser.
+     */
+    async function loadPools(portal) {
         var pools = await P.api('GET', '/api/portal/pools');
         var select = P.$('#pool');
+        var sw = P.$('#proxy-on');
         pools.forEach(function (p) { poolsById[p.id] = p; });
-        select.innerHTML = '<option value="">Automatic proxy</option>' + pools.map(function (p) {
-            return '<option value="' + p.id + '">' + esc(p.name) + (p.country ? ' · ' + esc(p.country) : '') + '</option>';
+        select.innerHTML = '<option value="">Automatic (best available)</option>' + pools.map(function (p) {
+            return '<option value="' + p.id + '">' + esc(p.name) + (p.country ? ' · ' + esc(p.country) : '') + ' (' + p.usable + '/' + p.total + ' online)</option>';
         }).join('');
-        P.$('#via').classList.toggle('hidden', !pools.length);
-        var saved = null;
-        try { saved = localStorage.getItem('portal.pool'); } catch (_) { /* private mode */ }
-        if (saved && poolsById[saved]) select.value = saved;
+        var saved = {};
+        try { saved = JSON.parse(localStorage.getItem('portal.connection') || '{}') || {}; } catch (_) { /* private mode */ }
+        if (saved.pool && poolsById[saved.pool]) select.value = saved.pool;
+        sw.checked = pools.length > 0 && (saved.proxy === true || !portal.allowDirect);
+        sw.disabled = !pools.length || !portal.allowDirect;
+        P.$('#proxy-hint').textContent = !pools.length
+            ? 'No proxies yet. Add your own under My proxies.'
+            : !portal.allowDirect ? 'Your administrator requires a proxy.' : "Off: websites see the server's own connection.";
         var update = function () {
+            var on = sw.checked;
+            P.$('#via').classList.toggle('hidden', !on);
             var p = poolsById[select.value];
-            P.$('#pool-health').textContent = p ? p.usable + ' of ' + p.total + ' online' : '';
-            try { localStorage.setItem('portal.pool', select.value); } catch (_) { /* ignore */ }
+            P.$('#pool-health').textContent = on && p ? p.usable + ' of ' + p.total + ' online' : '';
+            P.$('#conn-line').innerHTML = on
+                ? '<span class="dot ok"></span>Through a proxy: ' + esc(p ? p.name : 'automatic')
+                : '<span class="dot"></span>No proxy: direct connection';
+            try { localStorage.setItem('portal.connection', JSON.stringify({ proxy: on, pool: select.value })); } catch (_) { /* ignore */ }
         };
+        sw.addEventListener('change', update);
         select.addEventListener('change', update);
         update();
     }
@@ -103,12 +127,9 @@
         siteList = sites;
         var box = P.$('#sites');
         P.$('#sites-card').classList.toggle('hidden', !sites.length);
-        var chevron = '<svg class="icon chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>';
         box.innerHTML = sites.map(function (s) {
-            return '<li class="link-row"><button type="button" class="rowlink" data-site="' + s.id + '">' +
-                '<span class="initial" aria-hidden="true">' + esc(s.name.charAt(0)) + '</span>' +
-                '<span class="grow"><span class="title" data-block>' + esc(s.name) + '</span><span class="meta" data-block>' + esc(s.host) + '</span></span>' +
-                chevron + '</button></li>';
+            return '<li><button type="button" data-site="' + s.id + '" title="' + esc(s.host) + '">' +
+                '<span class="initial" aria-hidden="true">' + esc(s.name.charAt(0)) + '</span><span class="tile-name">' + esc(s.name) + '</span></button></li>';
         }).join('');
         P.$all('[data-site]', box).forEach(function (btn) {
             btn.addEventListener('click', function () { browse({ siteId: btn.getAttribute('data-site') }, btn); });
@@ -221,6 +242,8 @@
             P.$('#notice').textContent = me.portal.notice;
             P.$('#notice').classList.remove('hidden');
         }
-        return Promise.all([loadPools(), loadSites(), loadSessions()]);
+        serverSearch = me.portal.searchServer !== false;
+        P.$('#start-title').textContent = me.portal.title || 'Web Portal';
+        return Promise.all([loadPools(me.portal), loadSites(), loadSessions()]);
     }).catch(function (err) { P.showError(goError, err.message); });
 })();

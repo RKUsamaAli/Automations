@@ -58,6 +58,12 @@ async function search({ q, proxy = null, lang = 'en' }) {
 function proxyFor(user, via) {
     const pools = require('./pools');
     if (!via || via === 'direct') return { proxy: null, label: 'No proxy (direct)' };
+    if (via === 'auto') {
+        const poolId = pools.resolvePoolId(user, null, require('./sites').listEnabled(), null);
+        const proxy = poolId ? pools.pickProxy(poolId) : null;
+        if (!proxy) throw Object.assign(new Error('No proxy is online right now'), { status: 503 });
+        return { proxy, label: require('./sessionProxy').label(proxy) };
+    }
     if (pools.canUsePool(user, via)) {
         const proxy = pools.pickProxy(via);
         if (!proxy) throw Object.assign(new Error('No proxy of that pool is online right now'), { status: 503 });
