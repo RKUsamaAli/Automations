@@ -12,45 +12,43 @@
 </head>
 <body>
 <!-- Top bar + phone tab bar are added by Portal.shell() -->
-<main class="container">
-    <div class="page-head">
-        <div class="titles">
-            <h1>Browse</h1>
-            <p>Open a website through a proxy. A session keeps the site's logins until you end it.</p>
-        </div>
+<main class="start" id="main">
+    <!-- Centre: just search, like a search engine's start page -->
+    <div class="start-main">
+        <div class="start-brand"><span class="brand-mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg></span><span id="start-title">Web Portal</span></div>
+        <form id="go-form" class="start-search" role="search" novalidate>
+            <svg class="start-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+            <label for="url" class="sr-only">Search or type a web address</label>
+            <input id="url" type="search" enterkeyhint="go" placeholder="Search or type a web address" autocapitalize="none" autocorrect="off" spellcheck="false">
+            <button type="submit" class="primary" id="go">Go</button>
+        </form>
+        <div class="start-conn" id="conn-line" aria-live="polite"></div>
+        <div id="go-error" class="alert error hidden" role="alert"></div>
+        <div id="notice" class="alert info hidden" role="status"></div>
+        <section class="hidden start-sites" id="sites-card" aria-label="Your sites">
+            <ul class="tiles" id="sites"></ul>
+        </section>
     </div>
 
-    <div id="notice" class="alert info hidden" role="status"></div>
-
-    <!-- Address bar -->
-    <section class="panel" aria-label="Open a website"><div class="panel-body">
-        <form id="go-form" class="open-form" novalidate>
-            <div>
-                <label for="url" class="sr-only">Search or type a web address</label>
-                <input id="url" type="search" enterkeyhint="go" placeholder="Search or type a web address" autocapitalize="none" autocorrect="off" spellcheck="false">
+    <!-- Side: connection (proxy on/off) and open sessions -->
+    <aside class="start-side" aria-label="Connection and sessions">
+        <section class="panel" aria-labelledby="conn-title">
+            <div class="panel-head"><h2 id="conn-title">Connection</h2></div>
+            <div class="panel-body">
+                <label class="switch-row"><span><strong>Use a proxy</strong><span class="hint" id="proxy-hint">Off: websites see the server's own connection.</span></span>
+                    <input type="checkbox" role="switch" id="proxy-on"></label>
+                <div class="via hidden" id="via">
+                    <label for="pool" class="field-label">Connect through</label>
+                    <select id="pool" aria-describedby="pool-health"></select>
+                    <div class="hint" id="pool-health" aria-live="polite"></div>
+                </div>
             </div>
-            <div class="via" id="via">
-                <label for="pool" class="sr-only">Connect through</label>
-                <select id="pool" aria-describedby="pool-health"></select>
-            </div>
-            <button type="submit" class="primary" id="go">Open</button>
-        </form>
-        <div class="hint" id="pool-health" aria-live="polite"></div>
-        <div id="go-error" class="alert error hidden" role="alert"></div>
-    </div></section>
-
-    <div class="grid main-side">
-        <!-- Active sessions (the main task: continue where you left off) -->
+        </section>
         <section class="panel" aria-labelledby="sessions-title">
             <div class="panel-head"><h2 id="sessions-title">Sessions <span class="muted" id="session-count"></span></h2><button type="button" class="small" id="refresh">Refresh</button></div>
             <ul class="rows" id="sessions"></ul>
         </section>
-        <!-- Admin-configured sites -->
-        <section class="panel hidden" id="sites-card" aria-labelledby="sites-title">
-            <div class="panel-head"><h2 id="sites-title">Quick access</h2></div>
-            <ul class="rows" id="sites"></ul>
-        </section>
-    </div>
+    </aside>
 </main>
 <script src="/assets/js/common.js"></script>
 <script src="/assets/js/portal.js"></script>

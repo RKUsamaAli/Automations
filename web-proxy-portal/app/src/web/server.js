@@ -124,6 +124,7 @@ app.get('/login', (req, res, next) => (req.user ? res.redirect('/') : page('logi
 app.get('/register', (req, res, next) => (req.user ? res.redirect('/') : page('register.html')(req, res, next)));
 app.get('/logout', (_req, res) => res.redirect('/account')); // signing out is a POST (CSRF-safe)
 app.get('/', requireUser, page('index.html'));
+app.get('/search', requireUser, page('search.html'));
 app.get('/proxies', requireUser, page('proxies.html'));
 app.get('/account', requireUser, page('account.html'));
 app.get('/admin', requireAdmin, page('admin.html'));

@@ -19,6 +19,7 @@
     "better-sqlite3": "^11.10.0",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
+    "playwright-core": "1.63.0",
     "socks": "^2.8.4"
   },
   "devDependencies": {

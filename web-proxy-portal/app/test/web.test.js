@@ -470,11 +470,11 @@ test('browse: words open the search engine results page through the proxy', asyn
     const r = await c.req('POST', '/api/portal/browse', { url: 'best pizza near me' });
     assert.equal(r.status, 200, JSON.stringify(r.json));
     const ticket = readTicket(new URL(r.json.redirect).searchParams.get('t'));
-    assert.equal(ticket.url, 'https://html.duckduckgo.com/html/?q=best%20pizza%20near%20me');
+    assert.equal(ticket.url, 'https://www.google.com/search?q=best%20pizza%20near%20me');
     const s = await c.req('GET', '/api/portal/search-suggest?q=example.com');
     assert.equal(s.status, 200);
     assert.equal(s.json.kind, 'url');
-    assert.equal(s.json.engine, 'DuckDuckGo');
+    assert.equal(s.json.engine, 'Google');
 });
 
 test('performance: versioned assets cached for a year; API answers carry rate-limit headers', async () => {

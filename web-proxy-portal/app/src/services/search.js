@@ -9,10 +9,11 @@
  * The results page opens THROUGH the proxy like any other page, so search
  * and the sites the user picks use the same upstream proxy and session.
  *
- * Engines (Admin -> Settings -> Search): duckduckgo (default) | bing | google | custom.
- * Google Search refuses pages whose scripts were rewritten by a web proxy
- * (it shows "If you're having trouble accessing Google Search"), so it is not
- * the default; its home page still opens.
+ * Engines (Admin -> Settings -> Search): google (default) | duckduckgo | bing | custom.
+ * Google refuses SEARCH pages whose scripts were rewritten by a web proxy, so
+ * for "google" the results are fetched by a real headless browser on the
+ * server (src/search/worker.js) and shown as a clean results page; the other
+ * engines open their own results page through the proxy.
  * Custom: a results URL template with {q} (e.g. https://search.example/?q={q})
  * and optionally a suggestion URL returning OpenSearch JSON: ["q", ["a","b"]].
  */
@@ -42,7 +43,7 @@ function engine() {
         }
         return { name, search: s.search_url_custom, suggest: /\{q\}/.test(s.search_suggest_url_custom || '') ? s.search_suggest_url_custom : null };
     }
-    return ENGINES[s.search_engine] || ENGINES.duckduckgo;
+    return ENGINES[s.search_engine] || ENGINES.google;
 }
 
 const fill = (template, q) => template.replace(/\{q\}/g, encodeURIComponent(q));

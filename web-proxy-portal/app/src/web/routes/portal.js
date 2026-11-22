@@ -19,6 +19,7 @@ const express = require('express');
 const config = require('../../config');
 const sites = require('../../services/sites');
 const sessionProxy = require('../../services/sessionProxy');
+const webSearch = require('../../services/webSearch');
 const search = require('../../services/search');
 const RateLimiter = require('../../lib/rateLimiter');
 const { idOrNull } = require('../../lib/ids');
@@ -68,6 +69,24 @@ router.get('/pools', (req, res) => {
     );
 });
 
+// Google results via the server's headless browser (search worker), through
+// the chosen connection: via=direct or a pool id. 20 searches / minute / user.
+const searchLimiter = new RateLimiter(60000);
+router.get('/search', async (req, res) => {
+    const q = String(req.query.q || '').trim();
+    if (!q) return res.status(400).json({ error: 'Type something to search for' });
+    if (!searchLimiter.hit(`s:${req.user.id}`, 20)) return res.status(429).json({ error: 'Too many searches. Wait a moment.' });
+    try {
+        const via = webSearch.proxyFor(req.user, String(req.query.via || 'direct'));
+        const lang = String(req.get('accept-language') || 'en').split(',')[0].slice(0, 5);
+        const r = await webSearch.search({ q, proxy: via.proxy, lang });
+        events.record('search', { userId: req.user.id, detail: `${r.engine}${r.cached ? ' (cached)' : ''} via ${via.label}: ${q.slice(0, 200)}` });
+        res.json({ ...r, via: via.label });
+    } catch (e) {
+        res.status(e.status || 502).json({ error: e.message });
+    }
+});
+
 // Search suggestions for the address bar (engine's own, cached; 20/10 s per user).
 const suggestLimiter = new RateLimiter(10000);
 router.get('/search-suggest', async (req, res) => {
@@ -90,8 +109,10 @@ router.get('/sessions', (req, res) => {
 router.post('/browse', (req, res) => {
     const { url, siteId, sessionId } = req.body || {};
     const user = req.user;
-    const poolId = req.body ? idOrNull(req.body.poolId) : null;
-    if (poolId && !pools.canUsePool(user, poolId)) {
+    const wantsDirect = req.body && req.body.poolId === 'direct';
+    if (wantsDirect && !settings.get('allow_direct')) return res.status(403).json({ error: 'Browsing without a proxy is turned off by the administrator. Pick a proxy.' });
+    const poolId = wantsDirect ? 'direct' : req.body ? idOrNull(req.body.poolId) : null;
+    if (poolId && poolId !== 'direct' && !pools.canUsePool(user, poolId)) {
         return res.status(403).json({ error: 'You are not allowed to use that proxy pool.' });
     }
 

@@ -18,7 +18,7 @@ const events = require('./events');
 
 /** "yneehewk-ES-19 @ p.webshare.io:80" - username matters for Webshare-style endpoints. */
 function label(x) {
-    if (!x) return 'direct (server IP)';
+    if (!x) return 'No proxy (direct)';
     return `${x.username ? x.username + ' @ ' : ''}${x.host}:${x.port}`;
 }
 
@@ -27,14 +27,21 @@ function poolsFor(user, admin) {
     return pools.listAccessiblePools(user);
 }
 
+const settings = require('./settings');
+const DIRECT = 'direct';
+
 function choices(user, session, { admin = false } = {}) {
     const out = [];
+    const isDirect = !session.pool_id && !session.proxy_id;
+    if (settings.get('allow_direct') || isDirect) {
+        out.push({ id: null, name: 'Without proxy', proxies: [{ id: DIRECT, direct: true, label: 'No proxy (direct)', usable: !!settings.get('allow_direct'), current: isDirect, enabled: 1, status: 'healthy', latency_ms: null, active_sessions: 0, score: null }] });
+    }
     for (const p of poolsFor(admin ? null : user, admin)) {
         if (admin && p.owner_user_id && p.owner_user_id !== session.user_id) continue; // never another user's own proxies
         const proxies = db
             .get()
             .prepare(
-                `SELECT id, protocol, host, port, username, status, latency_ms, enabled, exit_ip, exit_country, exit_country_code, exit_city, exit_isp,
+                `SELECT id, protocol, host, port, username, status, latency_ms, enabled, exit_ip, exit_country, exit_country_code, exit_city, exit_isp, exit_timezone,
                         (SELECT COUNT(*) FROM sessions s WHERE s.proxy_id = proxies.id AND s.ended_at IS NULL) AS active_sessions
                  FROM proxies WHERE pool_id = ? ORDER BY (status = 'dead'), latency_ms IS NULL, latency_ms, id`
             )
@@ -49,6 +56,19 @@ function choices(user, session, { admin = false } = {}) {
 
 function change(session, proxyId, { user, admin = false }) {
     if (!session || session.ended_at || session.end_requested) throw new Error('That session has ended');
+    if (proxyId === DIRECT) {
+        if (!settings.get('allow_direct')) throw new Error('Browsing without a proxy is turned off by the administrator');
+        const before = session.proxy_id ? pools.getProxyWithSecrets(session.proxy_id) : null;
+        if (!session.pool_id && !session.proxy_id) return { changed: false, proxy: label(null) };
+        sessions.setPoolAndProxy(session.id, null, null);
+        events.record(admin ? 'admin_session_proxy_changed' : 'session_proxy_changed', {
+            userId: user.id,
+            target: `session:${session.id}`,
+            detail: `${label(before)} -> ${label(null)} (session ${session.id.slice(0, 8)}, ${session.start_url || ''})`,
+            changes: { proxy: [label(before), label(null)] }
+        });
+        return { changed: true, proxy: label(null), pool: null };
+    }
     const proxy = pools.getProxyWithSecrets(proxyId);
     if (!proxy || !pools.isUsable(proxy)) throw new Error('That proxy is not available (offline or disabled)');
     const pool = pools.getPool(proxy.pool_id);
@@ -70,4 +90,4 @@ function change(session, proxyId, { user, admin = false }) {
     return { changed: true, proxy: label(proxy), pool: pool.owner_user_id ? 'My proxies' : pool.name };
 }
 
-module.exports = { choices, change, label };
+module.exports = { choices, change, label, DIRECT };

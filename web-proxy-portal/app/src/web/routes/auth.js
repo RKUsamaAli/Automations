@@ -152,6 +152,8 @@ router.get('/me', (req, res) => {
             notice: s.portal_notice,
             registration: s.registration_mode,
             userProxies: s.user_proxies_enabled,
+            allowDirect: s.allow_direct,
+            searchServer: s.search_engine === 'google', // words -> /search results page (server browser)
             proxyBaseUrl: config.proxyBaseUrl
         }
     });

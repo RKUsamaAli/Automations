@@ -107,13 +107,59 @@ async function exitIp(proxy, { timeoutMs = config.healthCheck.timeoutMs } = {}) 
             country: clean(info.country),
             countryCode: clean(info.country_code || info.countryCode, 2),
             city: clean(info.city),
-            isp: clean((info.connection && (info.connection.isp || info.connection.org)) || info.isp || info.org)
+            isp: clean((info.connection && (info.connection.isp || info.connection.org)) || info.isp || info.org),
+            timeZone: validTimeZone((info.timezone && info.timezone.id) || info.timezone || info.time_zone)
         };
         pools.recordExitIp(proxy.id, geo);
         return { ok: true, ...geo, latencyMs: r.ms };
     } catch (e) {
         return { ok: false, error: e.message };
     }
+}
+
+/** An IANA time zone name the runtime knows ("Europe/Madrid"), else null. */
+function validTimeZone(v) {
+    if (typeof v !== 'string' || !/^[A-Za-z_]+(?:\/[A-Za-z0-9_+-]+){0,2}$/.test(v) || v.length > 64) return null;
+    try {
+        new Intl.DateTimeFormat('en', { timeZone: v });
+        return v;
+    } catch (_) {
+        return null;
+    }
+}
+
+/**
+ * The server's own internet connection (sessions with no proxy): public IP,
+ * location and time zone, from the same IP-info service. Cached for an hour.
+ * Falls back to the server clock's time zone when the lookup fails.
+ */
+let directCache = null;
+async function directExit({ timeoutMs = 6000 } = {}) {
+    if (directCache && Date.now() - directCache.at < (directCache.ok ? EXIT_IP_MAX_AGE_MS : 5 * 60000)) return directCache.value;
+    const fallback = { ip: null, country: null, countryCode: null, city: null, isp: null, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' };
+    let value = fallback;
+    let ok = false;
+    try {
+        const ctl = AbortSignal.timeout(timeoutMs);
+        const r = await fetch(process.env.EXIT_IP_CHECK_URL || 'https://ipwho.is/', { signal: ctl, headers: { accept: 'application/json' } });
+        const info = await r.json();
+        const clean = (v, n = 80) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, n) : null);
+        if (typeof info.ip === 'string' && /^[0-9a-f:.]{3,45}$/i.test(info.ip)) {
+            value = {
+                ip: info.ip,
+                country: clean(info.country),
+                countryCode: clean(info.country_code || info.countryCode, 2),
+                city: clean(info.city),
+                isp: clean((info.connection && (info.connection.isp || info.connection.org)) || info.isp || info.org),
+                timeZone: validTimeZone((info.timezone && info.timezone.id) || info.timezone || info.time_zone) || fallback.timeZone
+            };
+            ok = true;
+        }
+    } catch (_) {
+        /* keep the fallback */
+    }
+    directCache = { at: Date.now(), ok, value };
+    return value;
 }
 
 const EXIT_IP_MAX_AGE_MS = 60 * 60000; // re-check a proxy's exit IP at most hourly
@@ -184,4 +230,4 @@ function schedule() {
     };
 }
 
-module.exports = { probe, exitIp, requestVia, checkAll, schedule };
+module.exports = { probe, exitIp, directExit, validTimeZone, requestVia, checkAll, schedule };

@@ -1327,7 +1327,8 @@
             ['Portal', [
                 { name: 'portal_title', label: 'Portal name', value: s.portal_title },
                 { name: 'portal_notice', label: 'Notice on the Browse page', value: s.portal_notice, hint: 'Optional message shown to every user.' },
-                { name: 'show_portal_button', label: 'Show the floating toolbar on proxied pages (address bar, exit IP, switch proxy, way back to the portal)', type: 'checkbox', value: s.show_portal_button, hint: 'Users can also hide it for themselves on their Account page.' }
+                { name: 'show_portal_button', label: 'Show the top bar on proxied pages (address/search field, exit IP and local time, switch proxy, way back to the portal)', type: 'checkbox', value: s.show_portal_button, hint: 'Users can also hide it for themselves on their Account page.' },
+                { name: 'allow_direct', label: 'Allow browsing without a proxy (the server\'s own internet connection)', type: 'checkbox', value: s.allow_direct, hint: 'On: new sessions start without a proxy unless the user turns the proxy switch on. Off: every session must use a proxy.' }
             ]],
             ['Accounts', [
                 { name: 'registration_mode', label: 'Sign-up', type: 'select', value: s.registration_mode, options: [{ value: 'approval', label: 'Open, I approve each new account (recommended)' }, { value: 'open', label: 'Open, new accounts can browse immediately' }, { value: 'closed', label: 'Closed, only admins create accounts' }] },
@@ -1348,7 +1349,7 @@
                 { name: 'allowlist_strict', label: 'Also block images and scripts from other domains (may break sites using CDNs)', type: 'checkbox', value: s.allowlist_strict }
             ]],
             ['Search', [
-                { name: 'search_engine', label: 'Search engine for the address bar', type: 'select', value: s.search_engine, options: [{ value: 'duckduckgo', label: 'DuckDuckGo (recommended, works through the proxy)' }, { value: 'bing', label: 'Bing' }, { value: 'google', label: 'Google (its search blocks proxied pages)' }, { value: 'custom', label: 'Custom (URLs below)' }],
+                { name: 'search_engine', label: 'Search engine for the address bar', type: 'select', value: s.search_engine, options: [{ value: 'google', label: 'Google (results via the server\'s browser, recommended)' }, { value: 'duckduckgo', label: 'DuckDuckGo (opened through the proxy)' }, { value: 'bing', label: 'Bing (opened through the proxy)' }, { value: 'custom', label: 'Custom (URLs below)' }],
                     hint: 'Words typed in the Browse address bar open this engine\'s results through the proxy. With the allowlist on, add the engine\'s domain to the extra allowed domains.' },
                 { name: 'search_suggestions', label: 'Suggest search terms while typing (asks the search engine)', type: 'checkbox', value: s.search_suggestions },
                 { name: 'search_url_custom', label: 'Custom results URL', value: s.search_url_custom, hint: '{q} is replaced by the words, e.g. https://search.example.com/?q={q}' },

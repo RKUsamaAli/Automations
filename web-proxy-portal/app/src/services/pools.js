@@ -209,7 +209,7 @@ function deletePool(id) {
 
 // -------------------------------------------------------------- proxies ----
 const PROXY_PUBLIC = `id, pool_id, protocol, host, port, username, (password IS NOT NULL) AS has_password,
-    enabled, status, latency_ms, fail_count, last_checked_at, last_error, exit_ip, exit_country, exit_country_code, exit_city, exit_isp, exit_ip_checked_at,
+    enabled, status, latency_ms, fail_count, last_checked_at, last_error, exit_ip, exit_country, exit_country_code, exit_city, exit_isp, exit_timezone, exit_ip_checked_at,
     created_at, created_by, updated_at, updated_by`;
 
 function listProxies(poolId) {
@@ -399,9 +399,9 @@ function pickProxy(poolId, excludeIds = []) {
 function recordExitIp(id, geo) {
     db.get()
         .prepare(
-            `UPDATE proxies SET exit_ip = ?, exit_country = ?, exit_country_code = ?, exit_city = ?, exit_isp = ?, exit_ip_checked_at = ?, updated_at = ? WHERE id = ?`
+            `UPDATE proxies SET exit_ip = ?, exit_country = ?, exit_country_code = ?, exit_city = ?, exit_isp = ?, exit_timezone = ?, exit_ip_checked_at = ?, updated_at = ? WHERE id = ?`
         )
-        .run(geo.ip, geo.country || null, geo.countryCode || null, geo.city || null, geo.isp || null, Date.now(), Date.now(), id);
+        .run(geo.ip, geo.country || null, geo.countryCode || null, geo.city || null, geo.isp || null, geo.timeZone || null, Date.now(), Date.now(), id);
     cache.delete('proxy:' + id);
 }
 

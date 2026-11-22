@@ -110,3 +110,13 @@ test('toolbar: per-session key, bundle contents, proxy scores and exit IP', () =
     assert.equal(p.exit_ip, '203.0.113.9');
     assert.equal(p.exit_country_code, 'ES');
 });
+
+test('exit time zone: only real IANA names are kept', () => {
+    const { validTimeZone } = require('../src/jobs/healthCheck');
+    assert.equal(validTimeZone('Europe/Madrid'), 'Europe/Madrid');
+    assert.equal(validTimeZone('America/Argentina/Buenos_Aires'), 'America/Argentina/Buenos_Aires');
+    assert.equal(validTimeZone('UTC'), 'UTC');
+    assert.equal(validTimeZone('Mars/Olympus'), null);
+    assert.equal(validTimeZone('<script>'), null);
+    assert.equal(validTimeZone({ id: 'Europe/Madrid' }), null);
+});
