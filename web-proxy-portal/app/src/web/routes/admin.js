@@ -32,8 +32,10 @@ const healthCheck = require('../../jobs/healthCheck');
 const config = require('../../config');
 const errorReports = require('../../services/errorReports');
 const suggest = require('../../services/suggest');
+const clientDevices = require('../../services/clientDevices');
 const tzlib = require('../../lib/timezone');
 const { isId, idOrNull } = require('../../lib/ids');
+const { diff, describe } = require('../../lib/audit');
 const requestLog = require('../../services/requestLog');
 const metrics = require('../../services/metrics');
 const { isBug } = require('../../lib/errors');
@@ -61,7 +63,19 @@ const h = (fn) => (req, res, next) => {
     }
 };
 
-const audit = (req, type, detail) => events.record(type, { userId: req.user.id, detail, ip: req.ip });
+/**
+ * Activity log entry for an admin action.
+ *   audit(req, 'admin_site_updated', 'Example shop', { target: 'site:<id>', changes: diff(before, after, [...]) })
+ * Who / ip / request id / device / server are added automatically.
+ */
+const audit = (req, type, detail, { target = null, changes = null, level = 'info' } = {}) => {
+    const text = changes && Object.keys(changes).length ? `${detail}: ${describe(changes)}` : detail;
+    events.record(type, { userId: req.user.id, detail: text, ip: req.ip, target, changes, level });
+};
+const USER_FIELDS = ['role', 'enabled', 'email', 'pool_id', 'rate_limit_rpm', 'bandwidth_limit_mb_day', 'note', 'pending'];
+const POOL_FIELDS = ['name', 'country', 'type', 'is_default', 'description', 'visibility'];
+const SITE_FIELDS = ['name', 'start_url', 'domains', 'pool_id', 'enabled', 'show_on_landing', 'sort_order'];
+const SCRIPT_FIELDS = ['name', 'domains', 'run_at', 'load_order', 'enabled', 'code'];
 
 // ------------------------------------------------------------ overview ----
 router.get(
@@ -146,7 +160,10 @@ router.post(
             note: b.note,
             email: b.email || null
         });
-        audit(req, 'admin_user_created', result.user.username);
+        audit(req, 'admin_user_created', `${result.user.username} (${result.user.role})`, {
+            target: `user:${result.user.id}`,
+            changes: diff(null, { ...result.user, password: b.password ? 'set' : undefined, access_code: result.accessToken ? 'set' : undefined }, [...USER_FIELDS, 'password', 'access_code'])
+        });
         return result;
     })
 );
@@ -163,7 +180,9 @@ router.patch(
         }
         const updated = users.update(id(req), b);
         if (b.enabled === false) sessions.requestEndForUser(id(req));
-        audit(req, 'admin_user_updated', updated.username);
+        const changes = diff(target, updated, USER_FIELDS);
+        if (b.password) changes.password = ['***', 'changed'];
+        audit(req, 'admin_user_updated', updated.username, { target: `user:${updated.id}`, changes });
         return updated;
     })
 );
@@ -176,24 +195,42 @@ router.delete(
         if (target.role === 'admin' && users.countAdmins() <= 1) throw new Error('You cannot delete the last admin');
         sessions.requestEndForUser(target.id);
         users.remove(target.id);
-        audit(req, 'admin_user_deleted', target.username);
+        audit(req, 'admin_user_deleted', `${target.username} (${target.role})`, { target: `user:${target.id}`, level: 'warn' });
     })
 );
 router.post(
     '/users/:id/approve',
     h((req) => {
         const u = users.approve(id(req));
-        audit(req, 'admin_user_approved', u.username);
+        audit(req, 'admin_user_approved', u.username, { target: `user:${u.id}`, changes: { pending: [1, 0] } });
         return u;
     })
 );
-router.post('/users/:id/token', h((req) => ({ accessToken: users.regenerateToken(id(req)) })));
-router.delete('/users/:id/token', h((req) => users.revokeToken(id(req))));
+router.post(
+    '/users/:id/token',
+    h((req) => {
+        const u = users.getById(id(req));
+        if (!u) throw new Error('User not found');
+        const accessToken = users.regenerateToken(u.id);
+        audit(req, 'admin_access_code_created', u.username, { target: `user:${u.id}`, changes: { access_code: ['***', 'changed'] } });
+        return { accessToken };
+    })
+);
+router.delete(
+    '/users/:id/token',
+    h((req) => {
+        const u = users.getById(id(req));
+        if (!u) throw new Error('User not found');
+        users.revokeToken(u.id);
+        audit(req, 'admin_access_code_revoked', u.username, { target: `user:${u.id}` });
+    })
+);
 router.post(
     '/users/:id/logout',
     h((req) => {
-        users.update(id(req), { logoutEverywhere: true });
+        const u = users.update(id(req), { logoutEverywhere: true });
         sessions.requestEndForUser(id(req));
+        audit(req, 'admin_user_signed_out', `${u.username}: signed out everywhere, sessions ended`, { target: `user:${u.id}` });
     })
 );
 
@@ -207,13 +244,31 @@ const poolInput = (b) => ({
     visibility: b.visibility === 'assigned' ? 'assigned' : 'all'
 });
 router.get('/pools', h(() => ({ pools: pools.listPools(), types: pools.POOL_TYPES })));
-router.post('/pools', h((req) => pools.savePool(poolInput(req.body || {}))));
-router.put('/pools/:id', h((req) => pools.savePool({ id: id(req), ...poolInput(req.body || {}) })));
+router.post(
+    '/pools',
+    h((req) => {
+        const p = pools.savePool(poolInput(req.body || {}));
+        audit(req, 'admin_pool_created', p.name, { target: `pool:${p.id}`, changes: diff(null, p, POOL_FIELDS) });
+        return p;
+    })
+);
+router.put(
+    '/pools/:id',
+    h((req) => {
+        const before = pools.getPool(id(req));
+        if (!before) throw new Error('Pool not found');
+        const p = pools.savePool({ id: before.id, ...poolInput(req.body || {}) });
+        audit(req, 'admin_pool_updated', p.name, { target: `pool:${p.id}`, changes: diff(before, p, POOL_FIELDS) });
+        return p;
+    })
+);
 router.delete(
     '/pools/:id',
     h((req) => {
-        pools.deletePool(id(req));
-        audit(req, 'admin_pool_deleted', String(id(req)));
+        const before = pools.getPool(id(req));
+        if (!before) throw new Error('Pool not found');
+        pools.deletePool(before.id);
+        audit(req, 'admin_pool_deleted', before.name, { target: `pool:${before.id}`, level: 'warn' });
     })
 );
 router.get(
@@ -229,8 +284,15 @@ router.get('/pools/:id/access', h((req) => ({ userIds: pools.getPoolAccess(id(re
 router.put(
     '/pools/:id/access',
     h((req) => {
+        const before = pools.getPoolAccess(id(req));
         const userIds = pools.setPoolAccess(id(req), (req.body || {}).userIds);
-        audit(req, 'admin_pool_access', `pool ${id(req)}: ${userIds.length} user(s)`);
+        const pool = pools.getPool(id(req));
+        const names = (list) => list.map((u) => (users.getById(u) || { username: u }).username).sort();
+        const added = userIds.filter((u) => !before.includes(u));
+        const removed = before.filter((u) => !userIds.includes(u));
+        audit(req, 'admin_pool_access', `${pool ? pool.name : id(req)}: ${userIds.length} user(s)` + (added.length ? `, added ${names(added).join(', ')}` : '') + (removed.length ? `, removed ${names(removed).join(', ')}` : ''), {
+            target: `pool:${id(req)}`
+        });
         return { userIds };
     })
 );
@@ -239,7 +301,7 @@ router.post(
     h((req) => {
         const b = req.body || {};
         const result = pools.importProxies(id(req), b.text, b.defaultProtocol || 'http');
-        audit(req, 'admin_proxies_imported', `pool ${id(req)}: +${result.added}`);
+        audit(req, 'admin_proxies_imported', `${(pools.getPool(id(req)) || {}).name}: ${result.added} added, ${result.skipped} duplicates, ${result.errors.length} invalid`, { target: `pool:${id(req)}` });
         // Check the new proxies straight away so they become "healthy".
         if (result.added) healthCheck.checkAll({ poolId: id(req) }).catch(() => {});
         return result;
@@ -250,12 +312,38 @@ router.post(
     h(async (req) => {
         const result = await healthCheck.checkAll({ poolId: id(req) });
         if (result.skipped) throw new Error('A health check is already running, try again in a moment');
+        audit(req, 'admin_proxies_checked', `${(pools.getPool(id(req)) || {}).name}: ${result.checked} checked, ${result.healthy || 0} online, ${result.slow || 0} slow, ${result.dead || 0} offline`, { target: `pool:${id(req)}` });
         return result;
     })
 );
-router.delete('/pools/:id/dead', h((req) => ({ deleted: pools.deleteDeadProxies(id(req)) })));
-router.patch('/proxies/:id', h((req) => pools.setProxyEnabled(id(req), !!(req.body || {}).enabled)));
-router.delete('/proxies/:id', h((req) => pools.deleteProxy(id(req))));
+const proxyLabel = (x) => (x ? `${x.protocol}://${x.host}:${x.port}` : 'proxy');
+router.delete(
+    '/pools/:id/dead',
+    h((req) => {
+        const deleted = pools.deleteDeadProxies(id(req));
+        audit(req, 'admin_dead_proxies_removed', `${(pools.getPool(id(req)) || {}).name}: ${deleted} removed`, { target: `pool:${id(req)}` });
+        return { deleted };
+    })
+);
+router.patch(
+    '/proxies/:id',
+    h((req) => {
+        const x = pools.getProxyWithSecrets(id(req));
+        if (!x) throw new Error('Proxy not found');
+        const enabled = !!(req.body || {}).enabled;
+        pools.setProxyEnabled(x.id, enabled);
+        audit(req, enabled ? 'admin_proxy_enabled' : 'admin_proxy_disabled', proxyLabel(x), { target: `proxy:${x.id}`, changes: { enabled: [x.enabled, enabled ? 1 : 0] } });
+    })
+);
+router.delete(
+    '/proxies/:id',
+    h((req) => {
+        const x = pools.getProxyWithSecrets(id(req));
+        if (!x) throw new Error('Proxy not found');
+        pools.deleteProxy(x.id);
+        audit(req, 'admin_proxy_removed', proxyLabel(x), { target: `proxy:${x.id}` });
+    })
+);
 
 // --------------------------------------------------------------- sites ----
 const siteInput = (b) => ({
@@ -268,9 +356,33 @@ const siteInput = (b) => ({
     sortOrder: b.sortOrder
 });
 router.get('/sites', h(() => sites.list()));
-router.post('/sites', h((req) => sites.save(siteInput(req.body || {}))));
-router.put('/sites/:id', h((req) => sites.save({ id: id(req), ...siteInput(req.body || {}) })));
-router.delete('/sites/:id', h((req) => sites.remove(id(req))));
+router.post(
+    '/sites',
+    h((req) => {
+        const s = sites.save(siteInput(req.body || {}));
+        audit(req, 'admin_site_created', s.name, { target: `site:${s.id}`, changes: diff(null, s, SITE_FIELDS) });
+        return s;
+    })
+);
+router.put(
+    '/sites/:id',
+    h((req) => {
+        const before = sites.get(id(req));
+        if (!before) throw new Error('Site not found');
+        const s = sites.save({ id: before.id, ...siteInput(req.body || {}) });
+        audit(req, 'admin_site_updated', s.name, { target: `site:${s.id}`, changes: diff(before, s, SITE_FIELDS) });
+        return s;
+    })
+);
+router.delete(
+    '/sites/:id',
+    h((req) => {
+        const before = sites.get(id(req));
+        if (!before) throw new Error('Site not found');
+        sites.remove(before.id);
+        audit(req, 'admin_site_deleted', before.name, { target: `site:${before.id}`, level: 'warn' });
+    })
+);
 
 // ------------------------------------------------------------- scripts ----
 const scriptInput = (b) => ({
@@ -286,27 +398,40 @@ router.post(
     '/scripts',
     h((req) => {
         const s = scripts.save(scriptInput(req.body || {}));
-        audit(req, 'admin_script_saved', s.name);
+        audit(req, 'admin_script_created', s.name, { target: `script:${s.id}`, changes: diff(null, s, SCRIPT_FIELDS.filter((f) => f !== 'code')) });
         return s;
     })
 );
 router.put(
     '/scripts/:id',
     h((req) => {
-        const s = scripts.save({ id: id(req), ...scriptInput(req.body || {}) });
-        audit(req, 'admin_script_saved', s.name);
+        const before = scripts.get(id(req));
+        if (!before) throw new Error('Script not found');
+        const s = scripts.save({ id: before.id, ...scriptInput(req.body || {}) });
+        const changes = diff(before, s, SCRIPT_FIELDS.filter((f) => f !== 'code'));
+        if (before.code !== s.code) changes.code = [`${before.code.length} chars`, `${s.code.length} chars`];
+        audit(req, 'admin_script_updated', s.name, { target: `script:${s.id}`, changes });
         return s;
     })
 );
-router.delete('/scripts/:id', h((req) => scripts.remove(id(req))));
+router.delete(
+    '/scripts/:id',
+    h((req) => {
+        const before = scripts.get(id(req));
+        if (!before) throw new Error('Script not found');
+        scripts.remove(before.id);
+        audit(req, 'admin_script_deleted', before.name, { target: `script:${before.id}`, level: 'warn' });
+    })
+);
 
 // ------------------------------------------------------------ settings ----
 router.get('/settings', h(() => ({ values: settings.getAll(), defaults: settings.DEFAULTS })));
 router.put(
     '/settings',
     h((req) => {
+        const before = settings.getAll();
         const v = settings.update(req.body || {});
-        audit(req, 'admin_settings_updated', Object.keys(req.body || {}).join(','));
+        audit(req, 'admin_settings_updated', 'Settings', { target: 'settings', changes: diff(before, v, Object.keys(settings.DEFAULTS)) });
         return v;
     })
 );
@@ -323,17 +448,37 @@ router.get(
 router.post(
     '/sessions/:id/end',
     h((req) => {
-        sessions.requestEnd(req.params.id);
-        audit(req, 'admin_session_ended', req.params.id.slice(0, 8));
+        const s = sessions.get(req.params.id);
+        if (!s) throw new Error('Session not found');
+        sessions.requestEnd(s.id);
+        const owner = users.getById(s.user_id);
+        audit(req, 'admin_session_ended', `${owner ? owner.username : 'user'}: session ${s.id.slice(0, 8)} (${s.start_url || ''})`, { target: `session:${s.id}` });
     })
 );
 router.get('/usage', h((req) => ({ timezone: req.tz, users: usage.summary(Number(req.query.days) || 7, req.tz), daily: usage.daily(Number(req.query.days) || 14, req.tz) })));
 router.get(
     '/events',
     h((req) => {
-        const f = { type: req.query.type || null, userId: idOrNull(req.query.userId) };
+        const f = { type: req.query.type || null, userId: idOrNull(req.query.userId), source: req.query.source || null, level: req.query.level || null, q: req.query.q || null };
         if (!isPaged(req)) return events.list({ ...f, limit: req.query.limit });
         return paged(req, (o) => events.page(f, o), () => events.pageSummary(f));
+    })
+);
+
+router.get(
+    '/events/:id',
+    h((req) => {
+        const e = events.getOne(id(req));
+        if (!e) throw Object.assign(new Error('Not found'), { status: 404 });
+        return e;
+    })
+);
+router.get(
+    '/devices/:id',
+    h((req) => {
+        const d = clientDevices.get(id(req));
+        if (!d) throw Object.assign(new Error('Not found'), { status: 404 });
+        return d;
     })
 );
 
@@ -347,8 +492,14 @@ router.get('/events.csv', (req, res) => {
     const rows = events.list({ limit: 1000000 }).reverse();
     res.set('Content-Type', 'text/csv; charset=utf-8');
     res.set('Content-Disposition', `attachment; filename="portal-events-${tzlib.dayKey(Date.now(), req.tz)}.csv"`);
-    res.write(`time_utc,time_local (${req.tz}),event,user_id,username,detail,ip\n`);
-    for (const e of rows) res.write([new Date(e.created_at).toISOString(), tzlib.formatLocal(e.created_at, req.tz), e.type, e.user_id, e.username, e.detail, e.ip].map(csvCell).join(',') + '\n');
+    res.write(`time_utc,time_local (${req.tz}),event,level,source,user_id,username,detail,target,changes,ip,browser,os,device,screen,server,process,release,request_id\n`);
+    for (const e of rows) {
+        res.write(
+            [new Date(e.created_at).toISOString(), tzlib.formatLocal(e.created_at, req.tz), e.type, e.level, e.source, e.user_id, e.username, e.detail, e.target, e.changes, e.ip,
+                e.browser ? `${e.browser} ${e.browser_version || ''}`.trim() : '', e.os ? `${e.os} ${e.os_version || ''}`.trim() : '', [e.device_type, e.device_model].filter(Boolean).join(' '), e.screen,
+                e.server, e.process, e.release, e.request_id].map(csvCell).join(',') + '\n'
+        );
+    }
     res.end();
 });
 
@@ -374,9 +525,9 @@ router.get('/requests.csv', (req, res) => {
     const rows = requestLog.list({ ...reqFilter(req.query), since: Date.now() - (Number(req.query.hours) || 24) * 3600000, limit: 100000 }).reverse();
     res.set('Content-Type', 'text/csv; charset=utf-8');
     res.set('Content-Disposition', `attachment; filename="portal-requests-${tzlib.dayKey(Date.now(), req.tz)}.csv"`);
-    res.write(`time_utc,time_local (${req.tz}),source,kind,username,session,method,status,ms,bytes,host,url,proxy_id,request_id,error\n`);
+    res.write(`time_utc,time_local (${req.tz}),source,kind,username,session,method,status,ms,bytes,host,url,proxy_id,request_id,error,ip,browser,os,device,screen,server,process\n`);
     for (const r of rows) {
-        res.write([new Date(r.ts).toISOString(), tzlib.formatLocal(r.ts, req.tz), r.source, r.kind, r.username, r.session_id ? r.session_id.slice(0, 8) : '', r.method, r.status, r.ms, r.bytes, r.host, r.url, r.proxy_id, r.request_id, r.error].map(csvCell).join(',') + '\n');
+        res.write([new Date(r.ts).toISOString(), tzlib.formatLocal(r.ts, req.tz), r.source, r.kind, r.username, r.session_id ? r.session_id.slice(0, 8) : '', r.method, r.status, r.ms, r.bytes, r.host, r.url, r.proxy_id, r.request_id, r.error, r.ip, r.browser ? `${r.browser} ${r.browser_version || ''}`.trim() : '', r.os ? `${r.os} ${r.os_version || ''}`.trim() : '', [r.device_type, r.device_model].filter(Boolean).join(' '), r.screen, r.server, r.process].map(csvCell).join(',') + '\n');
     }
     res.end();
 });
@@ -440,8 +591,32 @@ router.get(
         return r;
     })
 );
-router.post('/errors/:id/resolve', h((req) => errorReports.setResolved(id(req), true, req.user.id, (req.body || {}).note || null)));
-router.post('/errors/:id/reopen', h((req) => errorReports.setResolved(id(req), false, req.user.id, null)));
-router.post('/errors/group/:fingerprint/resolve', h((req) => ({ resolved: errorReports.resolveGroup(req.params.fingerprint, req.user.id) })));
+router.post(
+    '/errors/:id/resolve',
+    h((req) => {
+        const r = errorReports.get(id(req));
+        if (!r) throw new Error('Report not found');
+        const note = (req.body || {}).note || null;
+        errorReports.setResolved(r.id, true, req.user.id, note);
+        audit(req, 'admin_error_resolved', `${r.ref}: ${r.message.slice(0, 80)}${note ? ' (note: ' + String(note).slice(0, 80) + ')' : ''}`, { target: `error:${r.id}` });
+    })
+);
+router.post(
+    '/errors/:id/reopen',
+    h((req) => {
+        const r = errorReports.get(id(req));
+        if (!r) throw new Error('Report not found');
+        errorReports.setResolved(r.id, false, req.user.id, null);
+        audit(req, 'admin_error_reopened', r.ref, { target: `error:${r.id}` });
+    })
+);
+router.post(
+    '/errors/group/:fingerprint/resolve',
+    h((req) => {
+        const resolved = errorReports.resolveGroup(req.params.fingerprint, req.user.id);
+        audit(req, 'admin_error_group_resolved', `${resolved} similar report(s) resolved (fingerprint ${String(req.params.fingerprint).slice(0, 16)})`, { target: `error-group:${req.params.fingerprint}` });
+        return { resolved };
+    })
+);
 
 module.exports = router;

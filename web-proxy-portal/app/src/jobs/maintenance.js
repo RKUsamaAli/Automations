@@ -10,6 +10,7 @@ const errorReports = require('../services/errorReports');
 const requestLog = require('../services/requestLog');
 const metrics = require('../services/metrics');
 const usage = require('../services/usage');
+const clientDevices = require('../services/clientDevices');
 const log = require('../lib/logger')('maintenance');
 
 const RETENTION_DAYS = Number(process.env.LOG_RETENTION_DAYS) || 30;
@@ -23,8 +24,10 @@ function run() {
     const metricRows = metrics.prune(Number(process.env.METRICS_RETENTION_DAYS) || 30);
     const checkRows = db.get().prepare('DELETE FROM proxy_checks WHERE created_at < ?').run(Date.now() - 30 * 86400000).changes;
     const usageRows = usage.prune(180);
-    if (ticketRows + eventRows + sessionRows + usageRows + errorRows + requestRows + metricRows + checkRows) {
-        log.info('pruned old rows', { tickets: ticketRows, events: eventRows, sessions: sessionRows, usage: usageRows, errorReports: errorRows, requests: requestRows, metrics: metricRows, proxyChecks: checkRows });
+    const deviceRows = clientDevices.prune(180);
+    const logFiles = require('../lib/logger').pruneFiles();
+    if (ticketRows + eventRows + sessionRows + usageRows + errorRows + requestRows + metricRows + checkRows + deviceRows + logFiles) {
+        log.info('pruned old rows', { tickets: ticketRows, events: eventRows, sessions: sessionRows, usage: usageRows, errorReports: errorRows, requests: requestRows, metrics: metricRows, proxyChecks: checkRows, devices: deviceRows, logFiles });
     }
 }
 

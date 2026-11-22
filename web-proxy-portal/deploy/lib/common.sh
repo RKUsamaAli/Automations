@@ -129,6 +129,15 @@ switch_current() {
 history_add() {
     # history_add <action> <release> <status> [note]
     printf '%s\t%s\t%s\t%s\t%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$1" "$2" "$3" "${4:-}" >> "$HISTORY_FILE"
+    # Also into the app's activity log (Admin -> Activity log), e.g. deploy_success.
+    # Best effort: never let logging fail a deploy or rollback.
+    local level=info
+    [[ "$3" == "failed" ]] && level=error
+    [[ "$1" == "rollback" ]] && level=warn
+    if [[ -e "$CURRENT_LINK/src/cli/index.js" ]]; then
+        (cd "$CURRENT_LINK" && as_app node src/cli/index.js record-event "${1}_${3}" "$level" \
+            "release $2${4:+ - $4} (by ${SUDO_USER:-${USER:-root}} on $(hostname))" >/dev/null 2>&1) || true
+    fi
 }
 
 # ------------------------------------------------------------- processes ---

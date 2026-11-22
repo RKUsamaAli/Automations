@@ -55,6 +55,10 @@ function save({ id, name, startUrl, domains, poolId = null, enabled = true, show
     return conn.prepare('SELECT * FROM sites WHERE id = ?').get(siteId);
 }
 
+function get(id) {
+    return db.get().prepare('SELECT * FROM sites WHERE id = ?').get(id) || null;
+}
+
 function remove(id) {
     db.get().prepare('DELETE FROM sites WHERE id = ?').run(id);
     cache.clear();
@@ -72,4 +76,4 @@ function isHostAllowed(host) {
     return listEnabled().some((site) => matchesAny(host, site.domains));
 }
 
-module.exports = { list, listEnabled, save, remove, isHostAllowed, clearCache: () => cache.clear() };
+module.exports = { list, listEnabled, get, save, remove, isHostAllowed, clearCache: () => cache.clear() };

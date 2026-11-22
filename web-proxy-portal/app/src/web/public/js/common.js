@@ -50,7 +50,7 @@
         };
         return fetch('/api/client-errors', {
             method: 'POST', credentials: 'same-origin',
-            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': readCookie('pp_csrf') },
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': readCookie('pp_csrf'), 'X-Timezone': TZ || 'UTC', 'X-Client': clientInfo() },
             body: JSON.stringify(body)
         }).then(function (r) { return r.json(); }).then(function (d) { lastReport.ref = d.ref; return d.ref || null; }).catch(function () { return null; });
     }
@@ -104,11 +104,33 @@
         var a = Math.abs(m);
         return 'UTC' + (m < 0 ? '-' : '+') + String(Math.floor(a / 60)).padStart(2, '0') + ':' + String(a % 60).padStart(2, '0');
     }
+    /**
+     * Device details sent with every API call (X-Client), stored once per
+     * device on the server so logs show the real browser, OS, screen etc.
+     * Nothing personal: no names, no ids, no fingerprinting beyond these basics.
+     */
+    function clientInfo() {
+        var n = navigator, c = n.connection || {};
+        var info = {
+            screen: screen.width + 'x' + screen.height,
+            vp: window.innerWidth + 'x' + window.innerHeight,
+            dpr: Math.round((window.devicePixelRatio || 1) * 100) / 100,
+            lang: n.language || '',
+            langs: (n.languages || []).slice(0, 4).join(','),
+            tz: TZ,
+            touch: (n.maxTouchPoints || 0) > 0,
+            mem: n.deviceMemory || null,
+            cores: n.hardwareConcurrency || null,
+            net: c.effectiveType || null
+        };
+        try { return JSON.stringify(info); } catch (_) { return ''; }
+    }
+
     /** Adds ?tz= to a plain link (downloads cannot send headers). */
     function withTz(url) { return url + (url.indexOf('?') >= 0 ? '&' : '?') + 'tz=' + encodeURIComponent(TZ); }
 
     async function api(method, url, body) {
-        var opts = { method: method, headers: { 'X-CSRF-Token': readCookie('pp_csrf'), 'X-Timezone': TZ }, credentials: 'same-origin' };
+        var opts = { method: method, headers: { 'X-CSRF-Token': readCookie('pp_csrf'), 'X-Timezone': TZ, 'X-Client': clientInfo() }, credentials: 'same-origin' };
         if (body !== undefined) {
             opts.headers['Content-Type'] = 'application/json';
             opts.body = JSON.stringify(body);

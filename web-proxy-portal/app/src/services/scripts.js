@@ -70,6 +70,10 @@ function setEnabled(id, enabled) {
     cache.clear();
 }
 
+function get(id) {
+    return db.get().prepare('SELECT * FROM scripts WHERE id = ?').get(id) || null;
+}
+
 function remove(id) {
     db.get().prepare('DELETE FROM scripts WHERE id = ?').run(id);
     cache.clear();
@@ -144,4 +148,4 @@ function buildScripts(pageUrl, host, scriptsList) {
     return parts.join('\n') + '\n';
 }
 
-module.exports = { RUN_AT, list, listEnabled, save, setEnabled, remove, buildBundle, clearCache: () => cache.clear() };
+module.exports = { RUN_AT, list, listEnabled, get, save, setEnabled, remove, buildBundle, clearCache: () => cache.clear() };

@@ -278,7 +278,7 @@ test('browser errors are reported with the browser trail; exports work', async (
 
     const csv = await admin.req('GET', '/api/admin/events.csv');
     assert.equal(csv.status, 200);
-    assert.match(csv.text, /^time_utc,time_local \(UTC\),event,user_id,username,detail,ip\n/);
+    assert.match(csv.text, /^time_utc,time_local \(UTC\),event,level,source,user_id,username,detail,target,changes,ip,browser,os,device,screen,server,process,release,request_id\n/);
     const jsonl = await admin.req('GET', '/api/admin/errors.jsonl?days=1');
     const lines = jsonl.text.trim().split('\n').map((l) => JSON.parse(l));
     assert.ok(lines.some((l) => l.ref === r.json.ref));
@@ -341,4 +341,33 @@ test('X-Timezone: the server uses the browser zone for "today" and remembers it'
     const csv = await c.req('GET', '/api/admin/events.csv?tz=Asia/Kolkata');
     assert.match(csv.text, /^time_utc,time_local \(Asia\/Kolkata\),/);
     assert.match(csv.text, /\+05:30"/);
+});
+
+test('admin actions are stored in the activity log with target, changes, device and request id', async () => {
+    const c = client();
+    await c.req('GET', '/login');
+    await c.req('POST', '/api/auth/login', { username: 'admin1', password: 'adminpass123' });
+    const device = { 'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36', 'x-client': JSON.stringify({ screen: '1920x1080', lang: 'en-US', tz: 'UTC' }) };
+    const site = await c.req('POST', '/api/admin/sites', { name: 'Audit site', startUrl: 'https://audit.example/', domains: 'audit.example' }, device);
+    assert.equal(site.status, 200, JSON.stringify(site.json));
+    const upd = await c.req('PUT', `/api/admin/sites/${site.json.id}`, { name: 'Audit site 2', startUrl: 'https://audit.example/', domains: 'audit.example' }, device);
+    assert.equal(upd.status, 200);
+    const list = await c.req('GET', '/api/admin/events?paged=1&type=admin_site_updated');
+    const e = list.json.items[0];
+    assert.equal(e.username, 'admin1');
+    assert.equal(e.target, `site:${site.json.id}`);
+    assert.match(e.detail, /name Audit site -> Audit site 2/);
+    assert.equal(e.browser, 'Chrome');
+    assert.equal(e.screen, '1920x1080');
+    const full = await c.req('GET', `/api/admin/events/${e.id}`);
+    assert.deepEqual(full.json.changes.name, ['Audit site', 'Audit site 2']);
+    assert.equal(full.json.request_id, upd.headers.get('x-request-id'));
+    assert.equal(full.json.client.os, 'Windows');
+    // the row itself records who changed it
+    const db = require('../src/db');
+    const row = db.get().prepare('SELECT created_by, updated_by FROM sites WHERE id = ?').get(site.json.id);
+    assert.equal(row.created_by, e.user_id);
+    assert.equal(row.updated_by, e.user_id);
+    // invalid ids are a 404, not a database error
+    assert.equal((await c.req('PUT', '/api/admin/sites/123', { name: 'x' })).status, 404);
 });

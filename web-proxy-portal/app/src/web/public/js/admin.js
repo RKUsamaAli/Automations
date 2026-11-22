@@ -386,11 +386,67 @@
         admin_user_deleted: 'User deleted', admin_user_approved: 'User approved', admin_pool_deleted: 'Pool deleted',
         admin_pool_access: 'Pool access changed', admin_proxies_imported: 'Proxies imported', admin_script_saved: 'Script saved',
         admin_settings_updated: 'Settings changed', admin_session_ended: 'Session ended by admin',
+        admin_access_code_created: 'Access code created', admin_access_code_revoked: 'Access code revoked', admin_user_signed_out: 'User signed out everywhere',
+        admin_pool_created: 'Pool created', admin_pool_updated: 'Pool updated', admin_proxies_checked: 'Proxies checked', admin_dead_proxies_removed: 'Offline proxies removed',
+        admin_proxy_enabled: 'Proxy enabled', admin_proxy_disabled: 'Proxy disabled', admin_proxy_removed: 'Proxy removed',
+        admin_site_created: 'Site created', admin_site_updated: 'Site updated', admin_site_deleted: 'Site deleted',
+        admin_script_created: 'Script created', admin_script_updated: 'Script updated', admin_script_deleted: 'Script deleted',
+        admin_error_resolved: 'Error resolved', admin_error_reopened: 'Error reopened', admin_error_group_resolved: 'Similar errors resolved',
+        user_proxies_checked: 'Own proxies checked', user_proxy_enabled: 'Own proxy enabled', user_proxy_disabled: 'Own proxy disabled', user_proxy_removed: 'Own proxy removed',
+        cli_admin_created: 'Admin created (server)', cli_user_created: 'User created (server)', cli_password_reset: 'Password reset (server)',
+        cli_proxies_imported: 'Proxies imported (server)', cli_proxies_checked: 'Proxies checked (server)', cli_migrations_applied: 'Database updated',
+        cli_script_added: 'Script added (server)', backup_created: 'Backup created',
+        deploy_success: 'Deployed', deploy_failed: 'Deploy failed', rollback_success: 'Rolled back', rollback_auto: 'Automatic rollback', rollback_failed: 'Rollback failed',
         process_start: 'Process started', process_stop: 'Process stopped', process_unclean_exit: 'Process crashed or killed'
     };
-    var EVENT_TONE = { login_failed: 'bad', blocked_domain: 'bad', proxy_dead: 'bad', process_unclean_exit: 'bad', rate_limited: 'warn', session_refused: 'warn', session_failover: 'warn', register: 'accent', proxy_recovered: 'ok', login: 'ok', process_start: 'ok' };
+    var EVENT_TONE = { deploy_failed: 'bad', rollback_failed: 'bad', rollback_auto: 'warn', rollback_success: 'warn', deploy_success: 'ok', cli_password_reset: 'warn', admin_user_deleted: 'warn', admin_pool_deleted: 'warn', admin_site_deleted: 'warn', admin_script_deleted: 'warn', login_failed: 'bad', blocked_domain: 'bad', proxy_dead: 'bad', process_unclean_exit: 'bad', rate_limited: 'warn', session_refused: 'warn', session_failover: 'warn', register: 'accent', proxy_recovered: 'ok', login: 'ok', process_start: 'ok' };
     function eventLabel(type) { return EVENT_LABELS[type] || type.replace(/_/g, ' '); }
-    function eventBadge(type) { return '<span class="badge ' + (EVENT_TONE[type] || '') + '" title="' + esc(type) + '">' + esc(eventLabel(type)) + '</span>'; }
+    function eventBadge(type, level) {
+        var tone = EVENT_TONE[type] || (level === 'error' ? 'bad' : level === 'warn' ? 'warn' : '');
+        return '<span class="badge ' + tone + '" title="' + esc(type) + '">' + esc(eventLabel(type)) + '</span>';
+    }
+    var SOURCE_LABELS = { web: 'Portal', proxy: 'Proxy', cli: 'Server CLI', deploy: 'Deploy', job: 'Background job', system: 'System' };
+    /** "Chrome 131 · Android 14 · mobile" from a row with device columns. */
+    function deviceText(d) {
+        if (!d || !d.browser && !d.os) return '';
+        return [d.browser && (d.browser + (d.browser_version ? ' ' + d.browser_version.split('.')[0] : '')), d.os && (d.os + (d.os_version ? ' ' + d.os_version.split('.')[0] : '')), d.device_model || d.device_type].filter(Boolean).join(' · ');
+    }
+    /** Definition list of everything known about a device. */
+    function deviceKv(d) {
+        if (!d) return '<p class="muted">No browser details (server or background action).</p>';
+        var rows = [['Browser', [d.browser, d.browser_version].filter(Boolean).join(' ')], ['Engine', d.engine], ['Operating system', [d.os, d.os_version].filter(Boolean).join(' ')],
+            ['Device', [d.device_type, d.device_model].filter(Boolean).join(' · ')], ['Screen', d.screen ? d.screen + (d.pixel_ratio ? ' @' + d.pixel_ratio + 'x' : '') : ''],
+            ['Window', d.last_viewport], ['Language', [d.language, d.languages && d.languages !== d.language ? '(' + d.languages + ')' : ''].filter(Boolean).join(' ')],
+            ['Time zone', d.timezone], ['Touch screen', d.touch == null ? '' : d.touch ? 'Yes' : 'No'], ['Memory / CPU', [d.memory_gb ? d.memory_gb + ' GB' : '', d.cpu_cores ? d.cpu_cores + ' cores' : ''].filter(Boolean).join(' · ')],
+            ['Network', d.last_network], ['First seen', d.created_at ? P.formatDate(d.created_at) : ''], ['User agent', d.user_agent]];
+        return '<dl class="kv">' + rows.filter(function (r) { return r[1]; }).map(function (r) { return '<dt>' + esc(r[0]) + '</dt><dd>' + esc(r[1]) + '</dd>'; }).join('') + '</dl>';
+    }
+    function changesTable(changes) {
+        var keys = Object.keys(changes || {});
+        if (!keys.length) return '';
+        return '<h3>Changes</h3>' + table([{ label: 'Field' }, { label: 'Before' }, { label: 'After' }], keys.map(function (k) {
+            var c = changes[k];
+            var show = function (v) { return v === null || v === undefined || v === '' ? '<span class="subtle">(empty)</span>' : esc(String(v)); };
+            return '<tr><td class="mono small">' + esc(k) + '</td><td class="small">' + show(c[0]) + '</td><td class="small">' + show(c[1]) + '</td></tr>';
+        }));
+    }
+    /** Side panel with one activity entry: who, what changed, device, server, request id. */
+    async function showEvent(id) {
+        var e = await P.api('GET', '/api/admin/events/' + encodeURIComponent(id));
+        showPanel(eventLabel(e.type), '<dl class="kv">' +
+            '<dt>When</dt><dd>' + esc(P.formatDate(e.created_at)) + ' <span class="subtle">(' + esc(new Date(e.created_at).toISOString().replace('T', ' ').slice(0, 19)) + ' UTC)</span></dd>' +
+            '<dt>Who</dt><dd>' + esc(e.username || (e.source === 'cli' || e.source === 'deploy' ? 'Server' : 'System')) + '</dd>' +
+            '<dt>What</dt><dd>' + esc(e.detail || '-') + '</dd>' +
+            (e.target ? '<dt>Target</dt><dd class="mono small">' + esc(e.target) + '</dd>' : '') +
+            '<dt>Level</dt><dd>' + esc(e.level) + '</dd><dt>Source</dt><dd>' + esc(SOURCE_LABELS[e.source] || e.source) + '</dd>' +
+            '<dt>Server</dt><dd>' + esc([e.server, e.process, e.release].filter(Boolean).join(' · ') || '-') + '</dd>' +
+            (e.ip ? '<dt>IP</dt><dd class="mono">' + esc(e.ip) + '</dd>' : '') +
+            (e.request_id ? '<dt>Request id</dt><dd class="mono small">' + esc(e.request_id) + ' <button type="button" class="small" id="ev-req">Find in Requests</button></dd>' : '') +
+            '<dt>Event id</dt><dd class="mono small">' + esc(e.id) + '</dd></dl>' +
+            changesTable(e.changes) + '<h3>Browser and device</h3>' + deviceKv(e.client), null, true);
+        var b = P.$('#ev-req');
+        if (b) b.addEventListener('click', function () { closeModal(); reqFilter.q = e.request_id; reqFilter.kind = ''; reqFilter.hours = '168'; location.hash = '#requests'; });
+    }
     function eventsTable(list, empty) {
         return table([{ label: 'Time' }, { label: 'Event' }, { label: 'User' }, { label: 'Details' }, { label: 'IP' }], list.map(function (e) {
             return '<tr><td>' + time(e.created_at) + '</td><td>' + eventBadge(e.type) + '</td><td>' + esc(e.username || '-') + '</td><td class="small">' + esc(e.detail || '') + '</td><td class="mono subtle">' + esc(e.ip || '') + '</td></tr>';
@@ -938,7 +994,7 @@
                 url: '/api/admin/requests?' + qs(),
                 headers: [{ label: 'Time' }, { label: 'User' }, { label: 'Type' }, { label: 'Result' }, { label: 'Duration', num: true }, { label: 'Size', num: true }, { label: 'Address' }, { label: '' }],
                 row: function (r) {
-                    return '<tr><td>' + time(r.ts) + '</td><td>' + esc(r.username || '-') + '</td><td class="small nowrap">' + esc(TYPE[r.kind] || r.kind) + ' <span class="subtle">' + esc(r.method || '') + '</span></td>' +
+                    return '<tr><td>' + time(r.ts) + '</td><td>' + esc(r.username || '-') + (deviceText(r) ? '<div class="cell-sub">' + esc(deviceText(r)) + '</div>' : '') + '</td><td class="small nowrap">' + esc(TYPE[r.kind] || r.kind) + ' <span class="subtle">' + esc(r.method || '') + '</span></td>' +
                         '<td>' + statusBadge(r.status) + '</td><td class="num">' + (r.ms != null ? r.ms + ' ms' : '-') + '</td><td class="num">' + (r.bytes != null ? esc(P.formatBytes(r.bytes)) : '-') + '</td>' +
                         '<td class="small"><div class="truncate maxw" title="' + esc(r.url || '') + '">' + esc(r.url || '') + '</div>' + (r.error ? '<div class="cell-sub">' + esc(r.error) + '</div>' : '') + '</td>' +
                         '<td class="actions">' + (r.session_id ? '<button type="button" class="small" data-session="' + esc(r.session_id) + '">Session</button>' : '') + '</td></tr>';
@@ -1092,6 +1148,12 @@
             '<dl class="kv">' + kv.map(function (p) { return '<dt>' + esc(p[0]) + '</dt><dd>' + esc(p[1]) + '</dd>'; }).join('') + '</dl>' +
             '<h3>Steps before the error</h3><ol class="timeline" aria-label="Steps before the error">' + steps + '</ol>' +
             (r.stack ? '<h3>Stack trace</h3><pre class="block">' + esc(r.stack) + '</pre>' : '') +
+            '<h3>Browser and device</h3>' + deviceKv(r.client) +
+            '<h3>Server at the time</h3>' + (r.system && r.system.server ? '<dl class="kv">' + [
+                ['Server', r.system.server], ['Process', r.system.process + ' (pid ' + r.system.pid + ')'], ['Release', r.system.release], ['Node', r.system.node],
+                ['Platform', r.system.platform], ['Process uptime', r.system.uptimeS + ' s'], ['Memory (process)', r.system.rssMb + ' MB rss, ' + r.system.heapMb + ' MB heap'],
+                ['Machine', 'load ' + r.system.load1 + ' · ' + r.system.freeMemMb + ' / ' + r.system.totalMemMb + ' MB free · ' + r.system.cpus + ' CPUs']
+            ].map(function (p) { return '<dt>' + esc(p[0]) + '</dt><dd>' + esc(p[1]) + '</dd>'; }).join('') + '</dl>' : '<p class="muted">Not recorded.</p>') +
             '<h3>Details</h3><pre class="block">' + esc(JSON.stringify(r.context, null, 2)) + '</pre>',
             '<button type="button" id="err-copy">Copy as JSON</button>' +
             (r.session_id ? '<button type="button" id="err-session">Session timeline</button>' : '') +
@@ -1165,13 +1227,15 @@
     }
 
     // ========================================================= activity log ==
-    var logFilter = { type: '', user: null };
+    var logFilter = { type: '', user: null, source: '', level: '' };
     async function logsView() {
         var usage = await P.api('GET', '/api/admin/usage?days=7');
         var types = Object.keys(EVENT_LABELS).map(function (k) { return [k, EVENT_LABELS[k]]; }).sort(function (a, b) { return a[1].localeCompare(b[1]); });
         view.innerHTML = pageHead('Activity log', 'Sign-ins, sessions, approvals, blocked sites, proxy changes, process restarts and admin actions.', '<a class="btn" href="' + P.withTz('/api/admin/events.csv') + '" download>Export CSV</a>') +
             '<div class="grid main-side">' +
             '<section class="panel"><div class="panel-head"><h2>Events</h2></div><div class="toolbar">' + selectHtml('etype', 'Event', logFilter.type, [['', 'All events']].concat(types)) +
+            selectHtml('esource', 'Source', logFilter.source, [['', 'All sources'], ['web', 'Portal'], ['proxy', 'Proxy'], ['cli', 'Server CLI'], ['deploy', 'Deploy'], ['system', 'System']]) +
+            selectHtml('elevel', 'Level', logFilter.level, [['', 'All levels'], ['problems', 'Warnings and errors']]) +
             '<input type="search" id="eq" placeholder="Filter by user" aria-label="Filter events by user"><span class="chips" id="event-chips"></span></div><div id="event-list"></div></section>' +
             panel('Usage per user, 7 days', table([{ label: 'User' }, { label: 'Requests', num: true }, { label: 'Traffic', num: true }], usage.users.map(function (u) {
                 return '<tr><td>' + esc(u.username) + '</td><td class="num">' + int(u.requests) + '</td><td class="num">' + esc(P.formatBytes(u.bytes)) + '</td></tr>';
@@ -1180,19 +1244,27 @@
         function loadList() {
             lazyTable({
                 mount: P.$('#event-list'),
-                url: '/api/admin/events?type=' + encodeURIComponent(logFilter.type) + (logFilter.user ? '&userId=' + logFilter.user.id : ''),
-                headers: [{ label: 'Time' }, { label: 'Event' }, { label: 'User' }, { label: 'Details' }, { label: 'IP' }],
+                url: '/api/admin/events?type=' + encodeURIComponent(logFilter.type) + '&source=' + logFilter.source + '&level=' + logFilter.level + (logFilter.user ? '&userId=' + logFilter.user.id : ''),
+                headers: [{ label: 'Time' }, { label: 'Event' }, { label: 'Who' }, { label: 'Details' }, { label: 'Device' }, { label: '' }],
                 row: function (e) {
-                    return '<tr><td>' + time(e.created_at) + '</td><td>' + eventBadge(e.type) + '</td><td>' + esc(e.username || '-') + '</td><td class="small">' + esc(e.detail || '') + '</td><td class="mono subtle">' + esc(e.ip || '') + '</td></tr>';
+                    var who = e.username || (e.source === 'cli' || e.source === 'deploy' ? 'Server' : 'System');
+                    return '<tr><td>' + time(e.created_at) + '</td><td>' + eventBadge(e.type, e.level) + '<div class="cell-sub">' + esc(SOURCE_LABELS[e.source] || e.source) + '</div></td>' +
+                        '<td>' + esc(who) + (e.ip ? '<div class="cell-sub mono">' + esc(e.ip) + '</div>' : '') + '</td>' +
+                        '<td class="small"><div class="truncate maxw" title="' + esc(e.detail || '') + '">' + esc(e.detail || '') + '</div></td>' +
+                        '<td class="small">' + esc(deviceText(e) || '-') + '</td>' +
+                        '<td class="actions"><button type="button" class="small" data-event="' + esc(e.id) + '">Details</button></td></tr>';
                 },
+                actions: { 'data-event': function (btn, value) { showEvent(value); } },
                 empty: 'No activity yet',
                 summary: function (m) {
-                    return summaryBar([['Events', int(m.total)], ['Users', int(m.users)]].concat(logFilter.type ? [] : m.types.slice(0, 4).map(function (t) { return [eventLabel(t.type), int(t.n)]; })));
+                    return summaryBar([['Events', int(m.total)], ['Users', int(m.users)], m.problems ? ['Warnings and errors', int(m.problems), 'warn'] : null].concat(logFilter.type ? [] : m.types.slice(0, 4).map(function (t) { return [eventLabel(t.type), int(t.n)]; })));
                 }
             });
         }
         loadList();
-        P.$('#etype').addEventListener('change', function (e) { logFilter.type = e.target.value; loadList(); });
+        [['#etype', 'type'], ['#esource', 'source'], ['#elevel', 'level']].forEach(function (p) {
+            P.$(p[0]).addEventListener('change', function (e) { logFilter[p[1]] = e.target.value; loadList(); });
+        });
         function renderChips() {
             P.$('#event-chips').innerHTML = logFilter.user ? chip('User: ' + logFilter.user.name, 'data-clear-user') : '';
         }

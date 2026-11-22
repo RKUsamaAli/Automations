@@ -121,14 +121,15 @@ function whereFor(f = {}) {
     return { where, args };
 }
 
-const FROM = 'FROM request_log r LEFT JOIN users u ON u.id = r.created_by';
+const FROM = 'FROM request_log r LEFT JOIN users u ON u.id = r.created_by LEFT JOIN client_devices d ON d.id = r.client_id';
+const DEVICE_COLS = 'd.browser, d.browser_version, d.os, d.os_version, d.device_type, d.device_model, d.screen';
 const whereSql = (where) => (where.length ? 'WHERE ' + where.join(' AND ') : '');
 
 /** Filtered list for Admin -> Requests (CSV export, tests). Newest first. */
 function list(f = {}) {
     const { where, args } = whereFor(f);
     args.push(Math.min(Number(f.limit) || 200, 2000));
-    return db.get().prepare(`SELECT r.*, r.created_at AS ts, r.created_by AS user_id, u.username ${FROM} ${whereSql(where)} ORDER BY r.id DESC LIMIT ?`).all(...args);
+    return db.get().prepare(`SELECT r.*, r.created_at AS ts, r.created_by AS user_id, u.username, ${DEVICE_COLS} ${FROM} ${whereSql(where)} ORDER BY r.id DESC LIMIT ?`).all(...args);
 }
 
 /**
@@ -144,7 +145,7 @@ function page(f = {}, { cursor = null, limit } = {}) {
         args.push(String(after[0]));
     }
     args.push(n + 1);
-    const rows = db.get().prepare(`SELECT r.*, r.created_at AS ts, r.created_by AS user_id, u.username ${FROM} ${whereSql(where)} ORDER BY r.id DESC LIMIT ?`).all(...args);
+    const rows = db.get().prepare(`SELECT r.*, r.created_at AS ts, r.created_by AS user_id, u.username, ${DEVICE_COLS} ${FROM} ${whereSql(where)} ORDER BY r.id DESC LIMIT ?`).all(...args);
     return paging.toPage(rows, n, (r) => [r.id]);
 }
 

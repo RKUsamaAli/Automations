@@ -171,8 +171,13 @@ router.post('/proxies', requireUserProxies, async (req, res, next) => {
     const { text, defaultProtocol } = req.body || {};
     try {
         const result = await pools.importUserProxies(req.user, text, defaultProtocol === 'socks5' ? 'socks5' : 'http', settings.get('max_proxies_per_user'));
+        events.record('user_proxies_added', {
+            userId: req.user.id,
+            detail: `${result.added} added, ${result.skipped || 0} duplicates, ${result.errors.length} rejected`,
+            target: result.poolId ? `pool:${result.poolId}` : null,
+            level: result.added ? 'info' : 'warn'
+        });
         if (result.added) {
-            events.record('user_proxies_added', { userId: req.user.id, detail: `+${result.added}`, ip: req.ip });
             healthCheck.checkAll({ poolId: result.poolId }).catch(() => {});
         }
         res.json(result);
@@ -188,6 +193,7 @@ router.post('/proxies/check', requireUserProxies, async (req, res, next) => {
         if (!pool) return res.json({ checked: 0 });
         const result = await healthCheck.checkAll({ poolId: pool.id });
         if (result.skipped) return res.status(409).json({ error: 'A check is already running, try again in a moment.' });
+        events.record('user_proxies_checked', { userId: req.user.id, detail: `${result.checked} checked, ${result.healthy || 0} online, ${result.dead || 0} offline`, target: `pool:${pool.id}` });
         res.json(result);
     } catch (e) {
         next(e);
@@ -197,14 +203,19 @@ router.post('/proxies/check', requireUserProxies, async (req, res, next) => {
 router.patch('/proxies/:id', requireUserProxies, (req, res) => {
     const owned = pools.getOwnedProxy(req.user.id, String(req.params.id));
     if (!owned) return res.status(404).json({ error: 'Proxy not found' });
-    pools.setProxyEnabled(owned.id, !!(req.body || {}).enabled);
+    const x = pools.getProxyWithSecrets(owned.id);
+    const enabled = !!(req.body || {}).enabled;
+    pools.setProxyEnabled(owned.id, enabled);
+    events.record(enabled ? 'user_proxy_enabled' : 'user_proxy_disabled', { userId: req.user.id, detail: `${x.protocol}://${x.host}:${x.port}`, target: `proxy:${owned.id}` });
     res.json({ ok: true });
 });
 
 router.delete('/proxies/:id', requireUserProxies, (req, res) => {
     const owned = pools.getOwnedProxy(req.user.id, String(req.params.id));
     if (!owned) return res.status(404).json({ error: 'Proxy not found' });
+    const x = pools.getProxyWithSecrets(owned.id);
     pools.deleteProxy(owned.id);
+    events.record('user_proxy_removed', { userId: req.user.id, detail: `${x.protocol}://${x.host}:${x.port}`, target: `proxy:${owned.id}` });
     res.json({ ok: true });
 });
 

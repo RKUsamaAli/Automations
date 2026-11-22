@@ -68,7 +68,7 @@ function list({ limit = 100, userId = null, type = null } = {}) {
     return db
         .get()
         .prepare(
-            `SELECT e.*, e.created_by AS user_id, u.username FROM events e LEFT JOIN users u ON u.id = e.created_by
+            `SELECT e.*, e.created_by AS user_id, u.username, ${DEVICE_COLS} FROM events e LEFT JOIN users u ON u.id = e.created_by ${DEVICE_JOIN}
              ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
              ORDER BY e.id DESC LIMIT ?`
         )
@@ -105,6 +105,19 @@ function evWhere({ userId = null, type = null, source = null, level = null, targ
     }
     return { where, args };
 }
+// Device summary columns shown in lists (full details: clientDevices.get()).
+const DEVICE_COLS = 'd.browser, d.browser_version, d.os, d.os_version, d.device_type, d.device_model, d.screen';
+const DEVICE_JOIN = 'LEFT JOIN client_devices d ON d.id = e.client_id';
+
+/** One entry with everything known about it (Admin -> Activity log -> details). */
+function getOne(id) {
+    const row = db
+        .get()
+        .prepare(`SELECT e.*, e.created_by AS user_id, u.username FROM events e LEFT JOIN users u ON u.id = e.created_by WHERE e.id = ?`)
+        .get(id);
+    if (!row) return null;
+    return { ...row, changes: row.changes ? JSON.parse(row.changes) : null, client: row.client_id ? require('./clientDevices').get(row.client_id) : null };
+}
 const sqlWhere = (w) => (w.length ? 'WHERE ' + w.join(' AND ') : '');
 
 /** One lazy-loaded batch, newest first. */
@@ -119,7 +132,7 @@ function page(f = {}, { cursor = null, limit } = {}) {
     args.push(n + 1);
     const rows = db
         .get()
-        .prepare(`SELECT e.*, e.created_by AS user_id, u.username FROM events e LEFT JOIN users u ON u.id = e.created_by ${sqlWhere(where)} ORDER BY e.id DESC LIMIT ?`)
+        .prepare(`SELECT e.*, e.created_by AS user_id, u.username, ${DEVICE_COLS} FROM events e LEFT JOIN users u ON u.id = e.created_by ${DEVICE_JOIN} ${sqlWhere(where)} ORDER BY e.id DESC LIMIT ?`)
         .all(...args);
     return paging.toPage(rows, n, (r) => [r.id]);
 }
@@ -138,4 +151,4 @@ function prune(olderThanDays = 30) {
     return db.get().prepare('DELETE FROM events WHERE created_at < ?').run(cutoff).changes;
 }
 
-module.exports = { record, list, page, pageSummary, prune, setSource };
+module.exports = { record, list, page, pageSummary, getOne, prune, setSource };
