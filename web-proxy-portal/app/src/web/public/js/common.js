@@ -129,7 +129,118 @@
     /** Adds ?tz= to a plain link (downloads cannot send headers). */
     function withTz(url) { return url + (url.indexOf('?') >= 0 ? '&' : '?') + 'tz=' + encodeURIComponent(TZ); }
 
-    async function api(method, url, body) {
+    // ============================================================ session ==
+    /**
+     * Sign-in session in the browser (tokens themselves are httpOnly cookies;
+     * the page only knows their expiry times).
+     *
+     *  - access token (5 min): renewed silently via POST /api/auth/refresh,
+     *    shortly before it expires while the user is active, or on demand when
+     *    an API call answers 401 access_token_expired (the call is then retried).
+     *  - identity token (24 h): when it expires, a password prompt is shown over
+     *    the current page; after signing in again the page simply continues
+     *    (pending API calls are retried). Nothing typed on the page is lost.
+     */
+    var session = { accessExpiresAt: 0, identityExpiresAt: 0, method: 'password', user: null };
+    var lastActivity = Date.now();
+    var refreshing = null;
+    var reauthing = null;
+
+    function updateSession(info, user) {
+        if (info) {
+            session.accessExpiresAt = info.accessExpiresAt || 0;
+            session.identityExpiresAt = info.identityExpiresAt || 0;
+            if (info.method) session.method = info.method;
+        }
+        if (user) session.user = user;
+    }
+
+    async function postAuth(url, body) {
+        var res = await fetch(url, {
+            method: 'POST', credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': readCookie('pp_csrf'), 'X-Timezone': TZ, 'X-Client': clientInfo() },
+            body: JSON.stringify(body || {})
+        });
+        var data = null;
+        try { data = await res.json(); } catch (_) { /* empty */ }
+        return { status: res.status, data: data || {} };
+    }
+
+    /** One refresh at a time; resolves when a valid access token is in place. */
+    function refreshAccess() {
+        if (refreshing) return refreshing;
+        refreshing = (async function () {
+            var r = await postAuth('/api/auth/refresh');
+            if (r.status === 200) { updateSession(r.data.session, r.data.user); crumb('auth', 'access token renewed'); return; }
+            if (r.data.code === 'identity_expired') return reauth(r.data);
+            location.href = '/login?next=' + encodeURIComponent(location.pathname + location.hash);
+            throw new Error('Not logged in');
+        })().finally(function () { refreshing = null; });
+        return refreshing;
+    }
+
+    /** Shows the "sign in again" prompt; resolves after a successful sign-in. */
+    function reauth(info) {
+        if (reauthing) return reauthing;
+        info = info || {};
+        var username = info.username || (session.user && session.user.username) || '';
+        var byCode = (info.method || session.method) === 'access_code';
+        reauthing = new Promise(function (resolve) {
+            var wrap = document.createElement('div');
+            wrap.className = 'dialog-backdrop reauth';
+            wrap.innerHTML = '<form class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="ra-title" aria-describedby="ra-msg" novalidate>' +
+                '<h2 id="ra-title">Your session has expired</h2>' +
+                '<p class="muted" id="ra-msg">For your security, sign in again to continue. This page stays as it is.</p>' +
+                (byCode ? '' : '<div class="field"><label>Account</label><div class="reauth-user">' + esc(username) + '</div></div>') +
+                '<div class="field"><label for="ra-secret">' + (byCode ? 'Access code' : 'Password') + '</label>' +
+                '<input id="ra-secret" type="password" autocomplete="' + (byCode ? 'one-time-code' : 'current-password') + '" required></div>' +
+                '<div class="alert error hidden" role="alert" id="ra-error"></div>' +
+                '<div class="row end"><button type="button" class="ghost" data-signout>Sign out</button><button type="submit" class="primary" id="ra-go">Continue</button></div></form>';
+            document.body.appendChild(wrap);
+            var input = $('#ra-secret', wrap);
+            var errBox = $('#ra-error', wrap);
+            input.focus();
+            $('[data-signout]', wrap).addEventListener('click', function () { logout(false); });
+            $('form', wrap).addEventListener('submit', async function (e) {
+                e.preventDefault();
+                if (!input.value) { showError(errBox, byCode ? 'Enter your access code' : 'Enter your password'); return input.focus(); }
+                var done = busy($('#ra-go', wrap), 'Signing in');
+                var body = byCode ? { token: input.value } : { username: username, password: input.value };
+                if (session.user) body.continueAs = session.user.id;
+                var r = await postAuth('/api/auth/login', body);
+                if (r.status === 200) {
+                    updateSession(r.data.session, r.data.user);
+                    crumb('auth', 'signed in again after the session expired');
+                    wrap.remove();
+                    reauthing = null;
+                    resolve();
+                    return;
+                }
+                done();
+                input.value = '';
+                input.focus();
+                showError(errBox, r.data.error || 'Sign-in failed');
+            });
+        });
+        return reauthing;
+    }
+
+    // Activity + timers: renew the access token in time while the user is active,
+    // show the prompt when the identity token runs out.
+    ['pointerdown', 'keydown', 'scroll', 'touchstart'].forEach(function (ev) {
+        window.addEventListener(ev, function () { lastActivity = Date.now(); }, { passive: true, capture: true });
+    });
+    function sessionTick() {
+        if (!session.identityExpiresAt || reauthing) return;
+        var now = Date.now();
+        if (now >= session.identityExpiresAt) { reauth(); return; }
+        var activeRecently = now - lastActivity < 10 * 60000;
+        if (activeRecently && session.accessExpiresAt - now < 60000) refreshAccess().catch(function () {});
+    }
+    setInterval(sessionTick, 15000);
+    document.addEventListener('visibilitychange', function () { if (!document.hidden) { lastActivity = Date.now(); sessionTick(); } });
+
+    async function api(method, url, body, isRetry) {
         var opts = { method: method, headers: { 'X-CSRF-Token': readCookie('pp_csrf'), 'X-Timezone': TZ, 'X-Client': clientInfo() }, credentials: 'same-origin' };
         if (body !== undefined) {
             opts.headers['Content-Type'] = 'application/json';
@@ -150,7 +261,13 @@
         crumb('api', method + ' ' + url, { status: res.status, ms: Date.now() - started });
         var data = null;
         try { data = await res.json(); } catch (_) { /* empty body */ }
-        if (res.status === 401 && !/\/api\/auth\//.test(url)) {
+        if (res.status === 401 && data && !isRetry) {
+            // expired access token: renew silently and retry this call once
+            if (data.code === 'access_token_expired') { await refreshAccess(); return api(method, url, body, true); }
+            // expired identity token: ask for the password, then continue
+            if (data.code === 'identity_expired') { await reauth(data); return api(method, url, body, true); }
+        }
+        if (res.status === 401 && !/\/api\/auth\/(login|register|password)/.test(url)) {
             location.href = '/login?next=' + encodeURIComponent(location.pathname + location.hash);
             throw new Error('Not logged in');
         }
@@ -272,7 +389,10 @@
     // ------------------------------------------------------------ shell --
     var me = null;
     async function loadMe() {
-        if (!me) me = await api('GET', '/api/auth/me');
+        if (!me) {
+            me = await api('GET', '/api/auth/me');
+            updateSession(me.session, me.user);
+        }
         return me;
     }
 
@@ -497,6 +617,6 @@
         formatBytes: formatBytes, timeAgo: timeAgo, formatDate: formatDate, colorFor: colorFor,
         confirm: confirmDialog, setupReveal: setupReveal, icon: icon, shell: shell, loadMe: loadMe, logout: logout,
         reportError: reportError, crumb: crumb, suggest: suggest, filterOptions: filterOptions,
-        tz: TZ, tzOffset: tzOffset, withTz: withTz
+        tz: TZ, tzOffset: tzOffset, withTz: withTz, updateSession: updateSession, session: session
     };
 })();

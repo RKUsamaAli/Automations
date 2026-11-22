@@ -105,7 +105,7 @@ router.post('/browse', (req, res) => {
         if (!s || s.user_id !== user.id || s.ended_at || s.end_requested) {
             return res.status(404).json({ error: 'That session has ended. Start a new one.' });
         }
-        const ticket = mintTicket({ uid: user.id, v: user.token_version, sid: s.id, url: url ? safeUrl(url) : null, cid: clientId() });
+        const ticket = mintTicket({ uid: user.id, v: user.token_version, sid: s.id, url: url ? safeUrl(url) : null, cid: clientId(), until: req.token && req.token.idx });
         return res.json({ redirect: `${config.proxyBaseUrl}/__portal/start?t=${encodeURIComponent(ticket)}` });
     }
 
@@ -132,7 +132,7 @@ router.post('/browse', (req, res) => {
         return res.status(429).json({ error: `You already have ${max} active sessions. End one before starting another.` });
     }
 
-    const ticket = mintTicket({ uid: user.id, v: user.token_version, url: target, pool: poolId, cid: clientId() });
+    const ticket = mintTicket({ uid: user.id, v: user.token_version, url: target, pool: poolId, cid: clientId(), until: req.token && req.token.idx });
     res.json({ redirect: `${config.proxyBaseUrl}/__portal/start?t=${encodeURIComponent(ticket)}` });
 });
 

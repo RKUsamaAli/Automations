@@ -28,6 +28,7 @@
         var errorEl = P.$('#error');
         var notice = P.$('#notice');
         if (params.get('signedout')) P.showError(notice, 'You have been signed out.');
+        if (params.get('expired')) P.showError(notice, 'Your session expired. Sign in again to continue.');
         if (params.get('registered')) P.showError(notice, 'Account created. You can sign in now.');
 
         P.$all('.tabs button').forEach(function (btn) {

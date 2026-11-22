@@ -77,7 +77,8 @@ test('login, browse ticket, allowlist and private-address protection', async () 
     assert.equal(bad.status, 401);
     const ok = await c.req('POST', '/api/auth/login', { username: 'user1', password: 'userpass123' });
     assert.equal(ok.status, 200);
-    assert.ok(c.jar.pp_login);
+    assert.ok(c.jar.pp_id, 'identity token cookie');
+    assert.ok(c.jar.pp_at, 'access token cookie');
 
     const b = await c.req('POST', '/api/portal/browse', { url: 'example.com/path?q=1' });
     assert.equal(b.status, 200);
@@ -370,4 +371,94 @@ test('admin actions are stored in the activity log with target, changes, device 
     assert.equal(row.updated_by, e.user_id);
     // invalid ids are a 404, not a database error
     assert.equal((await c.req('PUT', '/api/admin/sites/123', { name: 'x' })).status, 404);
+});
+
+// ------------------------------------------------------------ JWT sign-in --
+test('JWT: access token carries what requests need; expired access is renewed from the identity token', async () => {
+    const jwt = require('../src/lib/jwt');
+    const users = require('../src/services/users');
+    const c = client();
+    await c.req('GET', '/login');
+    const login = await c.req('POST', '/api/auth/login', { username: 'user1', password: 'userpass123' });
+    assert.equal(login.status, 200);
+    const session = login.json.session;
+    assert.ok(session.accessExpiresAt - Date.now() <= 5 * 60000 + 1000, 'access token lives 5 minutes');
+    assert.ok(session.identityExpiresAt - Date.now() > 23 * 3600000, 'identity token lives 24 hours');
+    const claims = jwt.verify(decodeURIComponent(c.jar.pp_at), { kind: 'access' });
+    const u = users.getById(claims.sub);
+    assert.equal(claims.name, 'user1');
+    assert.equal(claims.role, 'user');
+    assert.equal(claims.tv, u.token_version);
+    for (const k of ['email', 'pool', 'rpm', 'bw', 'tz', 'sid', 'idx', 'jti', 'iat', 'exp']) assert.ok(k in claims, `claim ${k}`);
+    assert.equal(jwt.verify(decodeURIComponent(c.jar.pp_at), { kind: 'identity' }), null, 'an access token is not an identity token');
+
+    // access token expired -> API says so, refresh issues a new one, retry works
+    c.jar.pp_at = encodeURIComponent(jwt.sign({ sub: u.id, tv: u.token_version, idx: claims.idx }, { kind: 'access', ttlSec: -5 }).token);
+    const denied = await c.req('GET', '/api/portal/sites');
+    assert.equal(denied.status, 401);
+    assert.equal(denied.json.code, 'access_token_expired');
+    const refreshed = await c.req('POST', '/api/auth/refresh');
+    assert.equal(refreshed.status, 200, JSON.stringify(refreshed.json));
+    assert.ok(refreshed.json.session.accessExpiresAt > Date.now());
+    assert.equal((await c.req('GET', '/api/portal/sites')).status, 200);
+
+    // page navigation without an access token: renewed silently on the server
+    delete c.jar.pp_at;
+    const page = await c.req('GET', '/');
+    assert.equal(page.status, 200);
+    assert.ok(c.jar.pp_at, 'new access cookie set');
+});
+
+test('JWT: expired identity token asks for the password again; same user only; tampering rejected', async () => {
+    const jwt = require('../src/lib/jwt');
+    const users = require('../src/services/users');
+    const c = client();
+    await c.req('GET', '/login');
+    await c.req('POST', '/api/auth/login', { username: 'user1', password: 'userpass123' });
+    const u = users.getById(jwt.verify(decodeURIComponent(c.jar.pp_at), { kind: 'access' }).sub);
+
+    // identity expired
+    c.jar.pp_id = encodeURIComponent(jwt.sign({ sub: u.id, tv: u.token_version, amr: ['pwd'] }, { kind: 'identity', ttlSec: -5 }).token);
+    delete c.jar.pp_at;
+    const r = await c.req('POST', '/api/auth/refresh');
+    assert.equal(r.status, 401);
+    assert.equal(r.json.code, 'identity_expired');
+    assert.equal(r.json.username, 'user1', 'the prompt knows whose password to ask for');
+    const api = await c.req('GET', '/api/portal/sites');
+    assert.equal(api.json.code, 'identity_expired');
+    const nav = await c.req('GET', '/proxies');
+    assert.equal(nav.status, 302);
+    assert.match(nav.headers.get('location'), /^\/login\?next=%2Fproxies&expired=1$/);
+
+    // re-sign-in from the prompt: another account is refused, the same one continues
+    const other = await c.req('POST', '/api/auth/login', { username: 'admin1', password: 'adminpass123', continueAs: u.id });
+    assert.equal(other.status, 409);
+    const same = await c.req('POST', '/api/auth/login', { username: 'user1', password: 'userpass123', continueAs: u.id });
+    assert.equal(same.status, 200);
+    assert.equal((await c.req('GET', '/api/portal/sites')).status, 200);
+
+    // tampered payload / alg=none are rejected
+    const [h, p, s] = decodeURIComponent(c.jar.pp_at).split('.');
+    const evil = Buffer.from(JSON.stringify({ ...JSON.parse(Buffer.from(p, 'base64url')), role: 'admin' })).toString('base64url');
+    c.jar.pp_at = encodeURIComponent(`${h}.${evil}.${s}`);
+    delete c.jar.pp_id;
+    assert.equal((await c.req('GET', '/api/admin/users')).status, 401);
+    const none = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url');
+    c.jar.pp_at = encodeURIComponent(`${none}.${p}.`);
+    assert.equal((await c.req('GET', '/api/portal/sites')).status, 401);
+});
+
+test('JWT: "sign out everywhere" revokes tokens that are still within their lifetime', async () => {
+    const a = client();
+    const b = client();
+    for (const c of [a, b]) {
+        await c.req('GET', '/login');
+        await c.req('POST', '/api/auth/login', { username: 'user1', password: 'userpass123' });
+    }
+    assert.equal((await b.req('GET', '/api/portal/sites')).status, 200);
+    await a.req('POST', '/api/auth/logout', { everywhere: true });
+    await new Promise((r) => setTimeout(r, 3100)); // user cache TTL
+    const r = await b.req('GET', '/api/portal/sites');
+    assert.equal(r.status, 401);
+    assert.equal((await b.req('POST', '/api/auth/refresh')).json.code, 'not_signed_in');
 });

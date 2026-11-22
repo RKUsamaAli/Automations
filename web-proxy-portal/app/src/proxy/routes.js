@@ -24,7 +24,7 @@ const upstream = require('./upstream');
 const { parseProxied } = require('./proxyUrl');
 const { clientIp } = require('./guard');
 const { renderMessage } = require('./pages');
-const { COOKIE_PROXY, TICKET_TTL_MS, readTicket, mintProxy, serializeCookie } = require('../lib/authTokens');
+const { COOKIE_PROXY, TICKET_TTL_MS, readTicket, issueProxy, serializeCookie } = require('../lib/authTokens');
 const { describeProxy } = require('../lib/proxyString');
 const log = require('../lib/logger')('proxy-routes');
 
@@ -113,9 +113,10 @@ function setupRoutes({ proxyServer, sessionStore, rh }) {
             });
         }
 
-        const { token, exp } = mintProxy(user);
+        // Proxy sign-in (JWT) lasts as long as the portal identity token it came from.
+        const { token, claims } = issueProxy(user, ticket.until);
         res.writeHead(302, {
-            'Set-Cookie': serializeCookie(COOKIE_PROXY, token, { maxAgeSec: (exp - Date.now()) / 1000 }),
+            'Set-Cookie': serializeCookie(COOKIE_PROXY, token, { maxAgeSec: claims.exp - Math.floor(Date.now() / 1000) }),
             Location: `/${sid}/${target}`,
             'Cache-Control': 'no-store',
             'Referrer-Policy': 'no-referrer'

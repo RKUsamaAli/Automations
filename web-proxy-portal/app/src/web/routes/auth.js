@@ -3,9 +3,13 @@
  * Authentication API.
  *
  *   POST /api/auth/register  { username, email?, password }     self sign-up (setting registration_mode)
- *   POST /api/auth/login     { username, password } | { token }
+ *   POST /api/auth/login     { username, password } | { token }  [, continueAs: userId ]
+ *                            -> identity (pp_id) + access (pp_at) JWT cookies
+ *   POST /api/auth/refresh   new 5-min access token from the identity token
+ *                            -> 401 code=identity_expired when the identity token
+ *                               expired: the page shows the password prompt
  *   POST /api/auth/logout    { everywhere? }
- *   GET  /api/auth/me        current user + public portal settings
+ *   GET  /api/auth/me        current user, token expiry times + public portal settings
  *   POST /api/auth/password  { currentPassword, newPassword }    change own password
  */
 const express = require('express');
@@ -15,7 +19,9 @@ const settings = require('../../services/settings');
 const sessions = require('../../services/sessions');
 const config = require('../../config');
 const RateLimiter = require('../../lib/rateLimiter');
-const { COOKIE_LOGIN, mintLogin, serializeCookie } = require('../../lib/authTokens');
+const { COOKIE_IDENTITY, issueIdentity, readIdentity } = require('../../lib/authTokens');
+const { setSignInCookies, setAccessCookie, clearSignInCookies, unauthorized, usable } = require('../middleware/auth');
+const context = require('../../lib/context');
 
 const router = express.Router();
 
@@ -31,9 +37,19 @@ const LOGIN_ERRORS = {
     disabled: 'Your account has been disabled. Contact the administrator.'
 };
 
-function setLoginCookie(res, user) {
-    const { token, exp } = mintLogin(user);
-    res.append('Set-Cookie', serializeCookie(COOKIE_LOGIN, token, { maxAgeSec: (exp - Date.now()) / 1000 }));
+// Refresh calls per identity token per minute (a page refreshes about every 5 min).
+const refreshes = new RateLimiter(60000);
+
+/** Issues identity + access cookies. Returns the session info the browser keeps. */
+function signIn(res, user, method) {
+    const identity = issueIdentity(user, { method });
+    const access = setSignInCookies(res, user, identity);
+    context.setActor(user.id); // the rest of this request acts as the signed-in user
+    return sessionInfo(access, method);
+}
+/** Expiry times (ms) the browser uses to renew silently / show the password prompt in time. */
+function sessionInfo(access, method) {
+    return { accessExpiresAt: access.exp * 1000, identityExpiresAt: access.idx * 1000, method: method || 'password' };
 }
 
 function publicUser(u) {
@@ -56,8 +72,8 @@ router.post('/register', (req, res) => {
     }
     events.record('register', { userId: user.id, detail: mode === 'approval' ? 'pending approval' : 'active', ip: req.ip });
     if (mode === 'approval') return res.json({ ok: true, pending: true });
-    setLoginCookie(res, user);
-    res.json({ ok: true, pending: false, user: publicUser(user) });
+    const session = signIn(res, user, 'password');
+    res.json({ ok: true, pending: false, user: publicUser(user), session });
 });
 
 // ---------------------------------------------------------------- login ----
@@ -69,7 +85,7 @@ router.post('/login', (req, res) => {
         return res.status(429).json({ error: 'Too many failed attempts. Try again in a few minutes.' });
     }
 
-    const { username, password, token } = req.body || {};
+    const { username, password, token, continueAs } = req.body || {};
     const method = token ? 'token' : 'password';
     const result = token ? users.authenticateToken(token) : users.authenticatePassword(username, password);
 
@@ -80,15 +96,37 @@ router.post('/login', (req, res) => {
         return res.status(result.error === 'invalid' ? 401 : 403).json({ error: message, reason: result.error });
     }
 
+    // Re-sign-in from the "session expired" prompt must be the SAME person,
+    // otherwise the open page would continue as somebody else.
+    if (continueAs && continueAs !== result.user.id) {
+        return res.status(409).json({ error: 'Sign in with the same account to continue, or sign out first.', code: 'different_user' });
+    }
     failures.reset(key);
-    setLoginCookie(res, result.user);
-    events.record('login', { userId: result.user.id, detail: method, ip: req.ip });
-    res.json({ ok: true, user: publicUser(result.user) });
+    const session = signIn(res, result.user, method === 'token' ? 'access_code' : 'password');
+    events.record(continueAs ? 'login_resumed' : 'login', { userId: result.user.id, detail: method === 'token' ? 'access code' : 'password', ip: req.ip });
+    res.json({ ok: true, user: publicUser(result.user), session });
+});
+
+// -------------------------------------------------------------- refresh ----
+router.post('/refresh', (req, res) => {
+    const identity = readIdentity(req.cookies[COOKIE_IDENTITY]);
+    if (!identity) return res.status(401).json({ error: 'Not logged in', code: 'not_signed_in' });
+    if (!refreshes.hit(`refresh:${identity.claims.jti}`, 30)) return res.status(429).json({ error: 'Too many refreshes' });
+    const user = users.getById(identity.claims.sub); // fresh read: revocation applies immediately
+    if (!usable(user, identity.claims.tv)) {
+        clearSignInCookies(res);
+        return res.status(401).json({ error: 'Your sign-in is no longer valid', code: 'not_signed_in' });
+    }
+    if (identity.expired) {
+        return res.status(401).json({ error: 'Your sign-in has expired', code: 'identity_expired', username: user.username, method: (identity.claims.amr || [])[0] === 'otp' ? 'access_code' : 'password' });
+    }
+    const access = setAccessCookie(res, user, identity.claims);
+    res.json({ ok: true, user: publicUser(user), session: sessionInfo(access, (identity.claims.amr || [])[0] === 'otp' ? 'access_code' : 'password') });
 });
 
 // --------------------------------------------------------------- logout ----
 router.post('/logout', (req, res) => {
-    res.append('Set-Cookie', serializeCookie(COOKIE_LOGIN, '', { maxAgeSec: 0 }));
+    clearSignInCookies(res);
     if (req.user) {
         if ((req.body || {}).everywhere) {
             // Invalidates every login cookie of this user and ends their browsing sessions.
@@ -103,9 +141,12 @@ router.post('/logout', (req, res) => {
 
 // ------------------------------------------------------------------- me ----
 router.get('/me', (req, res) => {
+    // Signed in but the access token expired: let the browser renew it and retry.
+    if (!req.user && req.auth && req.auth.state !== 'none') return unauthorized(req, res);
     const s = settings.getAll();
     res.json({
         user: req.user ? publicUser(req.user) : null,
+        session: req.token ? sessionInfo(req.token, null) : null,
         portal: {
             title: s.portal_title,
             notice: s.portal_notice,
@@ -123,7 +164,7 @@ router.post('/password', (req, res) => {
     try {
         const updated = users.changeOwnPassword(req.user.id, currentPassword, newPassword);
         // Changing the password logs out other devices; keep THIS device signed in.
-        setLoginCookie(res, updated);
+        signIn(res, updated, 'password');
         events.record('password_changed', { userId: req.user.id, ip: req.ip });
         res.json({ ok: true });
     } catch (e) {

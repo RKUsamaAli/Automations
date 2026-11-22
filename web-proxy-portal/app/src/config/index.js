@@ -77,8 +77,11 @@ const config = {
         idleTimeoutMin: int('SESSION_IDLE_TIMEOUT_MIN', 60),
         maxLifetimeHours: int('SESSION_MAX_LIFETIME_HOURS', 24),
         cleanupIntervalMin: int('SESSION_CLEANUP_INTERVAL_MIN', 15),
-        // Portal login cookie lifetime.
-        loginTtlHours: int('LOGIN_TTL_HOURS', 12)
+        // Sign-in (JWT). Identity token = who you are, used only to get new
+        // access tokens; when it expires the user re-enters the password
+        // (the page stays as it is). Access token = sent with every request.
+        identityTtlHours: Math.max(1, int('IDENTITY_TOKEN_TTL_HOURS', 24)),
+        accessTtlMinutes: Math.min(Math.max(1, int('ACCESS_TOKEN_TTL_MINUTES', 5)), 60)
     },
 
     healthCheck: {

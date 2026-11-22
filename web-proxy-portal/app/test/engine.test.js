@@ -43,7 +43,7 @@ test('real engine: hand-off, sticky upstream proxy, script injection, access con
     const pools = require('../src/services/pools');
     const scripts = require('../src/services/scripts');
     const settings = require('../src/services/settings');
-    const { mintTicket, mintProxy, COOKIE_PROXY } = require('../src/lib/authTokens');
+    const { mintTicket, issueProxy, COOKIE_PROXY } = require('../src/lib/authTokens');
 
     // ---- fake target site ----
     const sitePort = await freePort();
@@ -165,7 +165,7 @@ test('real engine: hand-off, sticky upstream proxy, script injection, access con
     const anon = await get(base + location, { accept: 'text/html', 'sec-fetch-dest': 'document' });
     assert.equal(anon.status, 302);
     assert.match(anon.headers.get('location'), /\/login$/);
-    const bobCookie = `${COOKIE_PROXY}=${mintProxy(bob).token}`;
+    const bobCookie = `${COOKIE_PROXY}=${issueProxy(bob).token}`;
     assert.equal((await get(base + location, { cookie: bobCookie, accept: 'text/html' })).status, 403);
 
     // ---- 5. failures produce an error page with a reference + a report with the trail ----

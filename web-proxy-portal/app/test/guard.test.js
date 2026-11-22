@@ -8,7 +8,7 @@ const assert = require('node:assert/strict');
 const users = require('../src/services/users');
 const sessions = require('../src/services/sessions');
 const settings = require('../src/services/settings');
-const { mintProxy, COOKIE_PROXY } = require('../src/lib/authTokens');
+const { issueProxy, COOKIE_PROXY } = require('../src/lib/authTokens');
 const { createGuard } = require('../src/proxy/guard');
 
 // ---- fake rammerhead pieces ----
@@ -59,7 +59,7 @@ test.before(() => {
     store.set(SID, { data: {}, injectable: { scripts: [] } });
 });
 
-const cookieFor = (u) => `${COOKIE_PROXY}=${mintProxy(u).token}; other=1`;
+const cookieFor = (u) => `${COOKIE_PROXY}=${issueProxy(u).token}; other=1`;
 
 test('public paths pass without a cookie', async () => {
     assert.equal(await guard(fakeReq('/__portal/start?t=x'), fakeRes(), {}, true, false), false);

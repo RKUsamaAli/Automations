@@ -85,4 +85,4 @@ function verify(token, secret, purpose) {
     return payload;
 }
 
-module.exports = { hashPassword, verifyPassword, randomToken, sha256, sign, verify };
+module.exports = { hashPassword, verifyPassword, randomToken, sha256, sign, verify, deriveKey };
