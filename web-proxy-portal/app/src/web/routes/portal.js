@@ -24,6 +24,7 @@ const RateLimiter = require('../../lib/rateLimiter');
 const { idOrNull } = require('../../lib/ids');
 const context = require('../../lib/context');
 const suggest = require('../../services/suggest');
+const users = require('../../services/users');
 const sessions = require('../../services/sessions');
 const pools = require('../../services/pools');
 const healthCheck = require('../../jobs/healthCheck');
@@ -33,6 +34,7 @@ const events = require('../../services/events');
 const { hostOf } = require('../../lib/domainMatch');
 const { mintTicket } = require('../../lib/authTokens');
 const { isPrivateHost } = require('../../lib/netGuard');
+const { normalizeUrl } = require('../../lib/urlInput');
 
 const router = express.Router();
 
@@ -41,25 +43,6 @@ const clientId = () => {
     const c = context.get();
     return c ? c.clientId : null;
 };
-
-/** Turns "example.com/path" into "https://example.com/path"; rejects non-http(s). */
-function normalizeUrl(input) {
-    let raw = String(input || '').trim();
-    if (!raw) throw new Error('Enter a website address');
-    if (raw.length > 4000) throw new Error('URL is too long');
-    if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) raw = 'https://' + raw;
-    let u;
-    try {
-        u = new URL(raw);
-    } catch (_) {
-        throw new Error('That does not look like a valid website address');
-    }
-    if (!['http:', 'https:'].includes(u.protocol)) throw new Error('Only http and https addresses are supported');
-    if (!u.hostname.includes('.') && u.hostname !== 'localhost') throw new Error('That does not look like a valid website address');
-    // Never let users point the proxy at the server itself / private networks.
-    if (isPrivateHost(u.hostname)) throw new Error('That address is not allowed');
-    return u.toString();
-}
 
 router.get('/sites', (_req, res) => {
     res.json(
@@ -162,6 +145,15 @@ function safeUrl(url) {
         return null;
     }
 }
+
+// Preferences: the floating toolbar on proxied pages.
+router.put('/preferences', (req, res) => {
+    const b = req.body || {};
+    if (typeof b.toolbarEnabled !== 'boolean') return res.status(400).json({ error: 'toolbarEnabled must be true or false' });
+    const u = users.setToolbar(req.user.id, b.toolbarEnabled);
+    events.record(b.toolbarEnabled ? 'toolbar_enabled' : 'toolbar_disabled', { userId: req.user.id, detail: 'Account page' });
+    res.json({ toolbarEnabled: u.toolbar_enabled === 1 });
+});
 
 // Which proxy a session uses, and switching it (next page load uses the new one).
 router.get('/sessions/:id/proxies', (req, res) => {

@@ -265,6 +265,40 @@ test.describe.serial('full product journey', () => {
         await phone.locator('#__portal_home').click();
     });
 
+    test('floating toolbar on the website: exit IP + location, address bar, switch proxy', async () => {
+        await phone.goto(ownProxyUrl);
+        await expect(phone.locator('#via-name')).toHaveText('Your own proxy');
+        const bar = phone.locator('portal-toolbar');
+        const fab = bar.getByRole('button', { name: /Portal toolbar/ });
+        await expect(fab).toBeVisible();
+        await shot(phone, '15d-toolbar-button-iphone', { fullPage: false });
+        await fab.click();
+        const panel = bar.getByRole('dialog', { name: 'Portal toolbar' });
+        await expect(panel).toBeVisible();
+        // connection: check the exit IP through the session's proxy
+        await panel.getByRole('button', { name: 'Check' }).click();
+        await expect(panel).toContainText('203.0.113.20');
+        await expect(panel).toContainText('Madrid, Spain');
+        await expect(panel).toContainText('Demo Telecom ES');
+        // more than one proxy -> the switch list is shown
+        await expect(panel.getByText('Switch proxy')).toBeVisible();
+        await shot(phone, '15e-toolbar-panel-iphone', { fullPage: false });
+        // address bar: words -> search results in THIS session (custom engine = fake shop)
+        await panel.getByRole('searchbox', { name: 'Search or type a web address' }).fill('fresh berries');
+        await panel.getByRole('button', { name: 'Go' }).click();
+        await expect(phone.locator('#search-title')).toHaveText('Results for "fresh berries"');
+        await expect(phone.locator('#via-name')).toHaveText('Your own proxy');
+        // switch to a proxy of the shared pool from the toolbar -> page reloads through it
+        await bar.getByRole('button', { name: /Portal toolbar/ }).click();
+        const target = phone.locator('portal-toolbar').getByRole('option').filter({ hasText: pools.shared }).first();
+        await target.click();
+        await expect(phone.locator('#via-name')).toHaveText('Admin provider (US)', { timeout: 15000 });
+        await phone.locator('portal-toolbar').getByRole('button', { name: /Portal toolbar/ }).click();
+        await expect(phone.locator('portal-toolbar').getByRole('dialog')).toContainText('New York, United States');
+        await shot(phone, '15f-toolbar-after-switch-iphone', { fullPage: false });
+        await phone.goto(S.appUrl + '/');
+    });
+
     test('a session shows its proxy and can be switched to another one', async () => {
         await expect(phone).toHaveURL(S.appUrl + '/');
         // the session opened through "My proxies" shows that proxy (127.0.0.1:<port> in the test setup)

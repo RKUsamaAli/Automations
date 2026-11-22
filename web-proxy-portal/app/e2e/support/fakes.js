@@ -45,6 +45,15 @@ function startTargetSite(port) {
             res.writeHead(204);
             return res.end();
         }
+        // Fake IP-info service (EXIT_IP_CHECK_URL=http://ip.localtest/ip): answers like ipwho.is,
+        // with a different exit IP / location per fake upstream proxy.
+        if (url.pathname === '/ip') {
+            const own = via === 'Your own proxy';
+            res.writeHead(200, { 'content-type': 'application/json' });
+            return res.end(JSON.stringify(own
+                ? { ip: '203.0.113.20', country: 'Spain', country_code: 'ES', city: 'Madrid', connection: { isp: 'Demo Telecom ES' } }
+                : { ip: '198.51.100.10', country: 'United States', country_code: 'US', city: 'New York', connection: { isp: 'Demo Hosting US' } }));
+        }
         // Fake search engine (Admin -> Settings -> Search -> Custom) for the address-bar test.
         if (url.pathname === '/suggest') {
             const q = url.searchParams.get('q') || '';

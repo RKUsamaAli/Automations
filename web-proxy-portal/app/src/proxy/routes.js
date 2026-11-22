@@ -26,6 +26,7 @@ const { clientIp } = require('./guard');
 const { renderMessage } = require('./pages');
 const { COOKIE_PROXY, TICKET_TTL_MS, readTicket, issueProxy, serializeCookie } = require('../lib/authTokens');
 const { describeProxy } = require('../lib/proxyString');
+const { setupToolbarRoutes, barKey } = require('./toolbar');
 const log = require('../lib/logger')('proxy-routes');
 
 const INJECT_PATH = '/__portal/inject.js';
@@ -141,10 +142,22 @@ function setupRoutes({ proxyServer, sessionStore, rh }) {
         // The script tag is requested BY the proxied page, so the Referer is
         // that page's proxy URL - decode it to find the real site.
         const page = parseProxied(req.headers.referer, (id) => sessionStore.get(id, false), rh);
+        // The toolbar (with its per-session key) only goes to real <script> loads
+        // of this session's own pages - never to fetch()/XHR, so a website cannot
+        // read the key by requesting this file itself.
+        const dest = req.headers['sec-fetch-dest'];
+        const user = req.portalUser;
+        const row = page && page.sid ? sessions.getCached(page.sid) : null;
+        const toolbarOn = settings.get('show_portal_button') && user && user.toolbar_enabled !== 0;
+        const toolbar =
+            toolbarOn && row && row.user_id === user.id && (!dest || dest === 'script')
+                ? { sid: row.id, key: barKey(row.id), base: config.proxyBaseUrl, portalUrl: config.appBaseUrl + '/', shadow: process.env.TOOLBAR_SHADOW === 'open' ? 'open' : 'closed' }
+                : null;
         let body;
         try {
             body = scripts.buildBundle(page ? page.destUrl : null, page ? page.host : null, undefined, {
-                portalUrl: settings.get('show_portal_button') ? config.appBaseUrl + '/' : null
+                portalUrl: toolbarOn && !toolbar ? config.appBaseUrl + '/' : null,
+                toolbar
             });
         } catch (e) {
             log.error('failed to build script bundle', e);
@@ -157,6 +170,8 @@ function setupRoutes({ proxyServer, sessionStore, rh }) {
         });
         res.end(body);
     });
+
+    setupToolbarRoutes(proxyServer);
 
     // ----------------------------------------------------------- health ----
     proxyServer.GET('/__portal/healthz', (_req, res) => {

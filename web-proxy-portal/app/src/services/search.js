@@ -9,7 +9,10 @@
  * The results page opens THROUGH the proxy like any other page, so search
  * and the sites the user picks use the same upstream proxy and session.
  *
- * Engines (Admin -> Settings -> Search): google | duckduckgo | bing | custom.
+ * Engines (Admin -> Settings -> Search): duckduckgo (default) | bing | google | custom.
+ * Google Search refuses pages whose scripts were rewritten by a web proxy
+ * (it shows "If you're having trouble accessing Google Search"), so it is not
+ * the default; its home page still opens.
  * Custom: a results URL template with {q} (e.g. https://search.example/?q={q})
  * and optionally a suggestion URL returning OpenSearch JSON: ["q", ["a","b"]].
  */
@@ -19,7 +22,8 @@ const log = require('../lib/logger')('search');
 
 const ENGINES = {
     google: { name: 'Google', search: 'https://www.google.com/search?q={q}', suggest: 'https://suggestqueries.google.com/complete/search?client=firefox&q={q}' },
-    duckduckgo: { name: 'DuckDuckGo', search: 'https://duckduckgo.com/?q={q}', suggest: 'https://duckduckgo.com/ac/?type=list&q={q}' },
+    // The HTML (no-JavaScript) version: works reliably through the proxy.
+    duckduckgo: { name: 'DuckDuckGo', search: 'https://html.duckduckgo.com/html/?q={q}', suggest: 'https://duckduckgo.com/ac/?type=list&q={q}' },
     bing: { name: 'Bing', search: 'https://www.bing.com/search?q={q}', suggest: 'https://api.bing.com/osjson.aspx?query={q}' }
 };
 
@@ -38,7 +42,7 @@ function engine() {
         }
         return { name, search: s.search_url_custom, suggest: /\{q\}/.test(s.search_suggest_url_custom || '') ? s.search_suggest_url_custom : null };
     }
-    return ENGINES[s.search_engine] || ENGINES.google;
+    return ENGINES[s.search_engine] || ENGINES.duckduckgo;
 }
 
 const fill = (template, q) => template.replace(/\{q\}/g, encodeURIComponent(q));

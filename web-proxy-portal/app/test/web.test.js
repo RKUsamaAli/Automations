@@ -470,11 +470,11 @@ test('browse: words open the search engine results page through the proxy', asyn
     const r = await c.req('POST', '/api/portal/browse', { url: 'best pizza near me' });
     assert.equal(r.status, 200, JSON.stringify(r.json));
     const ticket = readTicket(new URL(r.json.redirect).searchParams.get('t'));
-    assert.equal(ticket.url, 'https://www.google.com/search?q=best%20pizza%20near%20me');
+    assert.equal(ticket.url, 'https://html.duckduckgo.com/html/?q=best%20pizza%20near%20me');
     const s = await c.req('GET', '/api/portal/search-suggest?q=example.com');
     assert.equal(s.status, 200);
     assert.equal(s.json.kind, 'url');
-    assert.equal(s.json.engine, 'Google');
+    assert.equal(s.json.engine, 'DuckDuckGo');
 });
 
 test('performance: versioned assets cached for a year; API answers carry rate-limit headers', async () => {
@@ -552,4 +552,15 @@ test('session proxy: user sees and switches the proxy of their own session; rule
     assert.equal(adm.status, 200, JSON.stringify(adm.json));
     assert.equal(sessions.get(sid).proxy_id, a.id);
     sessions.markEnded(sid, 'test');
+});
+
+test('preferences: the floating toolbar can be turned off and on per user', async () => {
+    const c = client();
+    await c.req('GET', '/login');
+    await c.req('POST', '/api/auth/login', { username: 'user1', password: 'userpass123' });
+    assert.equal((await c.req('GET', '/api/auth/me')).json.user.toolbarEnabled, true);
+    assert.equal((await c.req('PUT', '/api/portal/preferences', { toolbarEnabled: false })).json.toolbarEnabled, false);
+    assert.equal((await c.req('GET', '/api/auth/me')).json.user.toolbarEnabled, false);
+    assert.equal((await c.req('PUT', '/api/portal/preferences', { toolbarEnabled: 'no' })).status, 400);
+    await c.req('PUT', '/api/portal/preferences', { toolbarEnabled: true });
 });

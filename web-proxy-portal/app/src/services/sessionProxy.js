@@ -34,12 +34,14 @@ function choices(user, session, { admin = false } = {}) {
         const proxies = db
             .get()
             .prepare(
-                `SELECT id, protocol, host, port, username, status, latency_ms, enabled,
+                `SELECT id, protocol, host, port, username, status, latency_ms, enabled, exit_ip, exit_country, exit_country_code, exit_city, exit_isp,
                         (SELECT COUNT(*) FROM sessions s WHERE s.proxy_id = proxies.id AND s.ended_at IS NULL) AS active_sessions
                  FROM proxies WHERE pool_id = ? ORDER BY (status = 'dead'), latency_ms IS NULL, latency_ms, id`
             )
             .all(p.id)
             .map((x) => ({ ...x, label: label(x), usable: pools.isUsable(x), current: x.id === session.proxy_id }));
+        const scores = pools.proxyScores(proxies.map((x) => x.id));
+        for (const x of proxies) x.score = scores.get(x.id).score;
         if (proxies.length) out.push({ id: p.id, name: p.owner_user_id ? 'My proxies' : p.name, country: p.country, proxies });
     }
     return out;

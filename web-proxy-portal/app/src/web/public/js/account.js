@@ -16,6 +16,17 @@
             ['Time zone', P.tz + ' (' + P.tzOffset() + ') · from this device']
         ];
         P.$('#profile').innerHTML = rows.map(function (r) { return '<dt>' + P.esc(r[0]) + '</dt><dd>' + P.esc(r[1]) + '</dd>'; }).join('');
+        var tb = P.$('#toolbar-on');
+        tb.checked = u.toolbarEnabled !== false;
+        tb.addEventListener('change', async function () {
+            try {
+                await P.api('PUT', '/api/portal/preferences', { toolbarEnabled: tb.checked });
+                P.toast(tb.checked ? 'Toolbar on. It shows on the next page you open.' : 'Toolbar off');
+            } catch (err) {
+                tb.checked = !tb.checked;
+                P.toast(err.message);
+            }
+        });
     });
 
     P.$('#pw-form').addEventListener('submit', async function (e) {
