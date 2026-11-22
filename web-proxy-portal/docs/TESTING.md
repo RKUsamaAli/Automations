@@ -6,7 +6,7 @@ Three layers, all runnable on a laptop or the server.
 |---|---|---|---|
 | Unit + API | `npm test` | services, security rules, HTTP API, sign-up/approval, pool access, user proxies (35 tests) | yes |
 | Real engine | part of `npm test` when Rammerhead is built | hand-off → session → traffic really through the upstream proxy with its credentials, script injection, SSRF block, access control | yes (deploy.sh links the engine first) |
-| **Browser journey** | `npm run e2e` | the whole product in Chromium, desktop + iPhone, 17 steps (below) | no (run before releases / in CI) |
+| **Browser journey** | `npm run e2e` | the whole product in Chromium, desktop + iPhone, 17 steps (below) | no (run before releases) |
 
 `deploy.sh` refuses to go live when `npm test` fails.
 
@@ -34,7 +34,7 @@ Three layers, all runnable on a laptop or the server.
 
 The outside world is simulated in `e2e/support/fakes.js`: a demo shop
 (`shop.localtest`) and two authenticated upstream proxies. Nothing touches the internet.
-Screenshots of every screen are written to `e2e/screenshots/` (not committed; in CI they are attached to the run as the `e2e-screenshots` artifact).
+Screenshots of every screen are written to `e2e/screenshots/` (not committed).
 
 ### Local run (starts its own stack)
 

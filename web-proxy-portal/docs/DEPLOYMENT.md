@@ -105,26 +105,30 @@ columns), so older code works with the newer schema and you normally do *not* ne
 with the pre-deploy snapshot (a safety copy of the current DB is saved first) and
 anything written since that deploy is lost.
 
-## 6. Deploy automatically on push (optional)
+## 6. Deploying from your own script
 
-`.github/workflows/web-proxy-portal-deploy.yml` (repo root) deploys over SSH when
-`web-proxy-portal/**` changes on `main`, or manually from the *Actions* tab (where you
-can also trigger a rollback). Add these repository secrets:
+Deployments are started manually (or by your own script on the server). There is
+no CI deploy. Two ways to call it:
 
-| Secret | Example |
-|---|---|
-| `DEPLOY_HOST` | `203.0.113.10` |
-| `DEPLOY_USER` | a user that can run `sudo portal-deploy` without a password |
-| `DEPLOY_SSH_KEY` | private key of that user (a dedicated key) |
-| `DEPLOY_PORT` | `22` (optional) |
+```bash
+# A) Let portal-deploy fetch from GitHub itself (REPO_URL / REPO_BRANCH in shared/.env, default main)
+sudo portal-deploy                       # latest commit of the deploy branch
+sudo portal-deploy --ref v1.4.0          # a tag, branch or commit
 
-Passwordless sudo limited to the two commands (`sudo visudo -f /etc/sudoers.d/portal-ci`):
+# B) Your script already pulled/merged a checkout -> deploy exactly that code
+cd /srv/Automations && git pull --ff-only
+sudo portal-deploy --source /srv/Automations
+```
+
+Either way you get the same safety net: tests run first, the database is backed
+up, the new release is health-checked, and a failed deploy rolls back by itself.
+`portal-deploy` exits non-zero on failure, so your script can stop or alert on it.
+To let a non-root deploy user run it, allow only these two commands
+(`sudo visudo -f /etc/sudoers.d/portal-deploy`):
 
 ```
 deployer ALL=(root) NOPASSWD: /usr/local/bin/portal-deploy, /usr/local/bin/portal-rollback
 ```
-
-Without the secrets the workflow simply skips.
 
 ## 7. Operations
 
