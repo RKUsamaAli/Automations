@@ -1,0 +1,9 @@
+# Pinned Rammerhead engine used by deploy.sh.
+# deploy.sh clones RAMMERHEAD_REPO at RAMMERHEAD_COMMIT, runs `npm install`
+# and `npm run build` once, and caches the build in shared/vendor/.
+#
+# To upgrade Rammerhead: change the commit below, test on a staging server,
+# commit, then deploy. Roll back with rollback.sh if anything breaks -
+# each release keeps the engine build it was deployed with.
+RAMMERHEAD_REPO=https://github.com/binary-person/rammerhead.git
+RAMMERHEAD_COMMIT=9d1bafa000e1b31de24379a7620389a3ecbfe1d9

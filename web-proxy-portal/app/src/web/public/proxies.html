@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="robots" content="noindex">
+    <title>My proxies</title>
+    <meta name="theme-color" content="#f6f7f9">
+    <script src="/assets/js/theme.js"></script>
+    <link rel="stylesheet" href="/assets/css/app.css">
+</head>
+<body>
+<main class="container">
+    <div class="page-head">
+        <div class="titles">
+            <h1>My proxies</h1>
+            <p>Your own upstream proxies (for example from Webshare). Only you can use them: choose <strong>My proxies</strong> under the proxy selector on Browse.</p>
+        </div>
+    </div>
+
+    <div id="disabled" class="alert warn hidden">Adding your own proxies is turned off by the administrator.</div>
+
+    <div class="grid main-side">
+        <section class="panel" aria-labelledby="list-title">
+            <div class="panel-head"><h2 id="list-title">Proxies <span class="muted" id="usage"></span></h2><button type="button" class="small" id="check">Check now</button></div>
+            <ul class="rows" id="list"></ul>
+        </section>
+
+        <section class="panel" id="add-card" aria-labelledby="add-title">
+            <div class="panel-head"><h2 id="add-title">Add proxies</h2></div>
+            <div class="panel-body">
+                <form id="add-form" novalidate>
+                    <div id="add-result" class="hidden" role="status"></div>
+                    <div class="field">
+                        <label for="text">Proxy list <span class="muted">(one per line)</span></label>
+                        <textarea id="text" class="code" spellcheck="false" autocapitalize="none" placeholder="http://user:pass@1.2.3.4:8080&#10;socks5://user:pass@5.6.7.8:1080&#10;1.2.3.4:8080:user:pass" aria-describedby="formats"></textarea>
+                        <div class="hint" id="formats">Accepted: <code>http://user:pass@ip:port</code>, <code>socks5://…</code>, <code>ip:port:user:pass</code> (Webshare) or <code>ip:port</code>.</div>
+                    </div>
+                    <div class="field">
+                        <label for="protocol">Protocol for lines without a scheme</label>
+                        <select id="protocol"><option value="http">HTTP</option><option value="socks5">SOCKS5</option></select>
+                    </div>
+                    <div class="meter" aria-hidden="true"><span id="usage-bar"></span></div>
+                    <p class="hint" id="usage-hint"></p>
+                    <button type="submit" class="primary" id="add">Add proxies</button>
+                </form>
+            </div>
+        </section>
+    </div>
+</main>
+<script src="/assets/js/common.js"></script>
+<script src="/assets/js/proxies.js"></script>
+</body>
+</html>

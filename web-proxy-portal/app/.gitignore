@@ -1,0 +1,15 @@
+# Dependencies and the vendored engine (built by deploy.sh)
+node_modules/
+vendor/
+# Local runtime data and secrets
+data/
+.env
+*.db
+*.db-wal
+*.db-shm
+.test-output.log
+# Playwright output
+e2e/.state.json
+e2e/report/
+e2e/test-results/
+e2e/screenshots/
