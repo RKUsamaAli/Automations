@@ -201,6 +201,12 @@ wait_healthy "$NEW_RELEASE" || die "New release is not healthy."
 ok "portal-web and portal-proxy are healthy on $NEW_RELEASE"
 history_add deploy "$NEW_RELEASE" success "ref=$REF commit=$SHA previous=${PREVIOUS:-none}"
 
+# The release is live and healthy: from here on nothing may undo it. Cleanup
+# problems are reported as warnings only.
+trap - EXIT
+trap - ERR
+set +e
+
 # --------------------------------------------------------- 9. cleanup ---
 step "9/9 Cleanup"
 # Update the installed portal-* scripts to this commit's version.
@@ -225,10 +231,10 @@ for cache in "$SHARED_DIR"/vendor/rammerhead-*; do
         log "Removed unused engine build $(basename "$cache")"
     fi
 done
-# Keep the newest KEEP_DB_BACKUPS pre-deploy backups.
-ls -1t "$SHARED_DIR"/backups/pre-deploy-*.db 2>/dev/null | tail -n +$(( KEEP_DB_BACKUPS + 1 )) | xargs -r rm -f
+# Keep the newest KEEP_DB_BACKUPS pre-deploy backups (none exist on a fresh server).
+find "$SHARED_DIR/backups" -maxdepth 1 -name 'pre-deploy-*.db' -printf '%T@ %p\n' 2>/dev/null \
+    | sort -rn | tail -n +$(( KEEP_DB_BACKUPS + 1 )) | cut -d' ' -f2- | xargs -r rm -f
 
-trap - EXIT
 echo
 ok "${C_BOLD}Deployed $NEW_RELEASE in $(( $(date +%s) - STARTED ))s${C_RESET}  (previous: ${PREVIOUS:-none})"
 echo "    Roll back any time with:  sudo portal-rollback"

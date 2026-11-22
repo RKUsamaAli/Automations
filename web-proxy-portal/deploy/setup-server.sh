@@ -64,6 +64,33 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# ------------------------------------------------- service management ---
+# A normal VPS runs systemd. Containers / WSL often do not: fall back to the
+# `service` command or start the daemon directly, and say what was skipped.
+HAS_SYSTEMD=0
+[[ -d /run/systemd/system ]] && HAS_SYSTEMD=1
+
+svc_enable_start() { # svc_enable_start <name>
+    if (( HAS_SYSTEMD )); then
+        systemctl enable --now "$1" >/dev/null 2>&1 || systemctl restart "$1"
+    else
+        service "$1" start >/dev/null 2>&1 || warn "No systemd: could not start $1 (start it manually)."
+    fi
+}
+svc_restart() {
+    if (( HAS_SYSTEMD )); then systemctl restart "$1"; else service "$1" restart >/dev/null 2>&1 || service "$1" start >/dev/null 2>&1 || warn "No systemd: could not restart $1."; fi
+}
+nginx_reload() {
+    if (( HAS_SYSTEMD )); then
+        systemctl enable nginx >/dev/null 2>&1 || true
+        systemctl reload nginx 2>/dev/null || systemctl restart nginx
+    elif pgrep -x nginx >/dev/null; then
+        nginx -s reload
+    else
+        nginx
+    fi
+}
+
 # --------------------------------------------------------- deploy.env ---
 # Creates /etc/proxy-portal/deploy.env on first run, then applies any CLI overrides.
 set_config_value() {
@@ -121,17 +148,23 @@ install_packages() {
 # ------------------------------------------------- 2. system tuning ---
 tune_system() {
     step "2/10 Timezone, swap, kernel limits"
-    timedatectl set-timezone "${TIMEZONE:-UTC}" || warn "Could not set timezone"
+    if (( HAS_SYSTEMD )); then
+        timedatectl set-timezone "${TIMEZONE:-UTC}" || warn "Could not set timezone"
+    else
+        ln -sf "/usr/share/zoneinfo/${TIMEZONE:-UTC}" /etc/localtime && echo "${TIMEZONE:-UTC}" > /etc/timezone
+    fi
 
     local swap_mb="${SWAP_SIZE_MB:-2048}"
     if (( swap_mb > 0 )) && ! swapon --show | grep -q '/swapfile'; then
         log "Creating ${swap_mb}MB swap file (protects small VPS from Node.js OOM crashes)"
-        fallocate -l "${swap_mb}M" /swapfile || dd if=/dev/zero of=/swapfile bs=1M count="$swap_mb"
-        chmod 600 /swapfile
-        mkswap /swapfile >/dev/null
-        swapon /swapfile
-        grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
-        ok "Swap enabled"
+        if { fallocate -l "${swap_mb}M" /swapfile || dd if=/dev/zero of=/swapfile bs=1M count="$swap_mb"; } \
+            && chmod 600 /swapfile && mkswap /swapfile >/dev/null && swapon /swapfile; then
+            grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+            ok "Swap enabled"
+        else
+            rm -f /swapfile
+            warn "Could not enable swap (not permitted here, e.g. inside a container) - skipped."
+        fi
     else
         ok "Swap already configured (or disabled)"
     fi
@@ -145,7 +178,7 @@ net.ipv4.tcp_max_syn_backlog = 4096
 net.ipv4.ip_local_port_range = 10240 65000
 net.ipv4.tcp_fin_timeout = 20
 EOF
-    sysctl --system >/dev/null
+    sysctl --system >/dev/null 2>&1 || warn "Some kernel settings could not be applied here (container?) - skipped."
     cat > /etc/security/limits.d/90-proxy-portal.conf <<EOF
 ${APP_USER} soft nofile 65535
 ${APP_USER} hard nofile 65535
@@ -281,8 +314,12 @@ setup_security() {
     ufw allow 80/tcp comment 'HTTP (ACME + redirect)' >/dev/null
     ufw allow 443/tcp comment 'HTTPS' >/dev/null
     ufw allow 8443/tcp comment 'Proxy cross-domain port' >/dev/null
-    ufw --force enable >/dev/null
-    ok "ufw: allowing ${ssh_port}, 80, 443, 8443"
+    if ufw --force enable >/dev/null 2>&1; then
+        ok "ufw: allowing ${ssh_port}, 80, 443, 8443"
+    else
+        warn "FIREWALL NOT ACTIVE: ufw could not be enabled here (no kernel permission, e.g. a container)."
+        warn "On a real VPS this must succeed - check: sudo ufw status"
+    fi
 
     cat > /etc/fail2ban/jail.d/proxy-portal.local <<EOF
 # Web Proxy Portal (setup-server.sh)
@@ -300,9 +337,9 @@ maxretry = 30
 findtime = 60
 bantime  = 10m
 EOF
-    systemctl enable --now fail2ban >/dev/null 2>&1 || true
-    systemctl restart fail2ban || warn "fail2ban restart failed (check: journalctl -u fail2ban)"
-    ok "fail2ban enabled (sshd + nginx rate-limit abuse)"
+    svc_enable_start fail2ban
+    svc_restart fail2ban
+    ok "fail2ban configured (sshd + nginx rate-limit abuse)"
 
     cat > /etc/apt/apt.conf.d/20auto-upgrades <<'EOF'
 APT::Periodic::Update-Package-Lists "1";
@@ -320,11 +357,15 @@ write_nginx() {
         APP_DOMAIN="$APP_DOMAIN" PROXY_DOMAIN="$PROXY_DOMAIN" \
         WEB_PORT="$(app_env WEB_PORT 3000)" PROXY_PORT="$(app_env PROXY_PORT 8080)" \
         PROXY_CROSS_PORT="$(app_env PROXY_CROSS_DOMAIN_PORT 8081)" SSL_CERT="$cert" SSL_KEY="$key"
+    # Hosts without IPv6 (some VPS plans, containers) cannot bind [::]:port.
+    if [[ ! -s /proc/net/if_inet6 ]]; then
+        sed -i '/listen \[::\]/d' /etc/nginx/sites-available/proxy-portal.conf
+        log "No IPv6 on this host - nginx listens on IPv4 only"
+    fi
     ln -sfn /etc/nginx/sites-available/proxy-portal.conf /etc/nginx/sites-enabled/proxy-portal.conf
     rm -f /etc/nginx/sites-enabled/default
     nginx -t >/dev/null 2>&1 || { nginx -t; die "nginx config test failed"; }
-    systemctl enable nginx >/dev/null 2>&1
-    systemctl reload nginx 2>/dev/null || systemctl restart nginx
+    nginx_reload
 }
 
 setup_nginx_ssl() {
@@ -372,8 +413,12 @@ setup_nginx_ssl() {
 setup_pm2_and_cron() {
     step "9/10 PM2 boot service, log rotation, backups"
     # Start PM2 (and the saved app list) at boot, as the app user.
-    env PATH="$PATH" "$(pm2_bin)" startup systemd -u "$APP_USER" --hp "$APP_HOME" >/dev/null
-    systemctl enable "pm2-${APP_USER}" >/dev/null 2>&1 || true
+    if (( HAS_SYSTEMD )); then
+        env PATH="$PATH" "$(pm2_bin)" startup systemd -u "$APP_USER" --hp "$APP_HOME" >/dev/null
+        systemctl enable "pm2-${APP_USER}" >/dev/null 2>&1 || true
+    else
+        warn "No systemd: PM2 will not start automatically after a reboot (run: sudo portal-restart)."
+    fi
     # Rotate app logs: 20MB per file, 14 files.
     if ! pm2_app ls -m 2>/dev/null | grep -q pm2-logrotate; then
         pm2_app install pm2-logrotate >/dev/null 2>&1 || warn "Could not install pm2-logrotate (logs will not rotate)"
@@ -390,7 +435,8 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 17 3 * * * root /usr/local/bin/portal-backup --quiet >> ${SHARED_DIR}/logs/backup.log 2>&1
 EOF
     chmod 644 /etc/cron.d/proxy-portal
-    ok "PM2 starts on boot (service pm2-${APP_USER}); daily backup at 03:17"
+    svc_enable_start cron
+    if (( HAS_SYSTEMD )); then ok "PM2 starts on boot (service pm2-${APP_USER}); daily backup at 03:17"; else ok "Daily backup at 03:17"; fi
 }
 
 # ---------------------------------------------- 10. install commands ---

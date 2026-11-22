@@ -10,9 +10,11 @@
     var state = { pools: [], poolTypes: [] };
 
     // ---------------------------------------------------------------- utils --
+    // Same wording as the user's "My proxies" screen.
     function badge(status) {
-        var cls = { healthy: 'ok', slow: 'warn', dead: 'bad', unknown: '' }[status] || '';
-        return '<span class="badge ' + cls + '">' + esc(status) + '</span>';
+        var map = { healthy: ['ok', 'Online'], slow: ['warn', 'Slow'], dead: ['bad', 'Offline'], unknown: ['', 'Not checked'] };
+        var m = map[status] || ['', status];
+        return '<span class="badge ' + m[0] + '" title="' + esc(status) + '">' + m[1] + '</span>';
     }
     function yesNo(v) { return v ? '<span class="badge ok">yes</span>' : '<span class="badge">no</span>'; }
     function poolName(id) {
@@ -31,9 +33,14 @@
     function on(selector, event, handler) {
         P.$all(selector, view).forEach(function (el) { el.addEventListener(event, function (e) { handler(el, e); }); });
     }
-    async function confirmed(message, fn) {
-        if (!confirm(message)) return;
+    async function confirmed(message, fn, opts) {
+        if (!(await P.confirm(message, opts || { confirmLabel: 'Continue', danger: true }))) return;
         try { await fn(); } catch (err) { P.toast(err.message); }
+    }
+    function updatePendingBadge(n) {
+        var el = P.$('#pending-count');
+        el.textContent = n;
+        el.classList.toggle('hidden', !n);
     }
 
     // ---------------------------------------------------------------- modal --
@@ -56,6 +63,12 @@
             var val = f.value == null ? '' : f.value;
             var hint = f.hint ? '<div class="hint">' + esc(f.hint) + '</div>' : '';
             if (f.type === 'info') return '<div class="field">' + f.html + '</div>';
+            if (f.type === 'users') {
+                return '<div class="field"><label>' + esc(f.label) + '</label><div class="user-picker" id="' + id + '">' +
+                    (f.options.length ? f.options.map(function (o) {
+                        return '<label class="check"><input type="checkbox" value="' + o.value + '"' + (f.value.indexOf(o.value) !== -1 ? ' checked' : '') + '> ' + esc(o.label) + '</label>';
+                    }).join('') : '<span class="muted small">No users yet.</span>') + '</div>' + hint + '</div>';
+            }
             if (f.type === 'checkbox') {
                 return '<label class="check"><input type="checkbox" id="' + id + '" name="' + f.name + '"' + (val ? ' checked' : '') + '> ' + esc(f.label) + '</label>' + hint;
             }
@@ -85,6 +98,10 @@
             cfg.fields.forEach(function (f) {
                 if (f.type === 'info') return;
                 var el = P.$('#f-' + f.name);
+                if (f.type === 'users') {
+                    values[f.name] = P.$all('input:checked', el).map(function (i) { return Number(i.value); });
+                    return;
+                }
                 values[f.name] = f.type === 'checkbox' ? el.checked : el.value;
             });
             var btn = P.$('#modal-submit');
@@ -110,22 +127,32 @@
     // ------------------------------------------------------------ dashboard --
     async function dashboard() {
         var o = await P.api('GET', '/api/admin/overview');
-        P.$('#release').textContent = 'release ' + o.release;
-        var max = Math.max.apply(null, o.daily.map(function (d) { return d.bytes; }).concat([1]));
+        P.$('#release').textContent = o.release;
+        updatePendingBadge(o.pendingUsers);
+        // Always 14 day slots (empty days = 0) so one busy day is not one giant bar.
+        var byDay = {};
+        o.daily.forEach(function (d) { byDay[d.day] = d; });
+        var days = [];
+        for (var i = 13; i >= 0; i--) {
+            var key = new Date(Date.now() - i * 86400000).toISOString().slice(0, 10);
+            days.push(byDay[key] || { day: key, bytes: 0, requests: 0 });
+        }
+        var max = Math.max.apply(null, days.map(function (d) { return d.bytes; }).concat([1]));
         view.innerHTML =
             '<div class="stats">' +
             stat(o.sessions.active, 'Active sessions') + stat(o.sessions.today, 'Sessions today') +
-            stat(o.users, 'Users') + stat(o.usableProxies + ' / ' + o.proxies, 'Usable proxies') +
+            stat(o.users, 'Users') + (o.pendingUsers ? '<div class="stat highlight"><div class="value">' + o.pendingUsers + '</div><div class="label">Awaiting approval</div></div>' : '') +
+            stat(o.usableProxies + ' / ' + o.proxies, 'Usable proxies') +
             stat(P.formatBytes(o.usageToday.bytes), 'Bandwidth today') + stat(o.usageToday.requests, 'Requests today') +
             '</div>' +
             (o.proxies === 0 ? '<div class="alert error">No upstream proxies yet. Open <strong>Proxy pools</strong> and import some, or allow direct connections in Settings.</div>' : '') +
             '<section class="card"><h2>Bandwidth (14 days)</h2>' +
-            (o.daily.length ? '<div class="bars" id="bars"></div><div class="bars-labels">' + o.daily.map(function (d) { return '<span>' + esc(d.day.slice(5)) + '</span>'; }).join('') + '</div>' : '<p class="muted">No traffic yet.</p>') +
+            '<div class="bars" id="bars"></div><div class="bars-labels">' + days.map(function (d, idx) { return '<span>' + (idx % 2 ? '' : esc(d.day.slice(5))) + '</span>'; }).join('') + '</div>' +
             '</section>' +
             '<section class="card"><h2>Recent events</h2>' + eventsTable(o.recentEvents) + '</section>';
         var bars = P.$('#bars');
         if (bars) {
-            o.daily.forEach(function (d) {
+            days.forEach(function (d) {
                 var b = document.createElement('div');
                 b.className = 'bar';
                 b.style.height = Math.max(2, Math.round((d.bytes / max) * 100)) + '%'; // CSSOM is allowed by the CSP
@@ -135,11 +162,23 @@
         }
     }
     function stat(value, label) { return '<div class="stat"><div class="value">' + esc(value) + '</div><div class="label">' + esc(label) + '</div></div>'; }
+    var EVENT_LABELS = {
+        login: 'Signed in', logout: 'Signed out', login_failed: 'Sign-in failed', register: 'Signed up',
+        password_changed: 'Password changed', session_start: 'Session started', session_end_requested: 'Session ended',
+        session_refused: 'Session refused', session_failover: 'Proxy failover', sessions_expired: 'Sessions expired',
+        blocked_domain: 'Blocked site', rate_limited: 'Rate limited', proxy_dead: 'Proxy offline', proxy_recovered: 'Proxy back online',
+        user_proxies_added: 'Own proxies added', admin_user_created: 'User created', admin_user_updated: 'User updated',
+        admin_user_deleted: 'User deleted', admin_user_approved: 'User approved', admin_pool_deleted: 'Pool deleted',
+        admin_pool_access: 'Pool access changed', admin_proxies_imported: 'Proxies imported', admin_script_saved: 'Script saved',
+        admin_settings_updated: 'Settings changed', admin_session_ended: 'Session ended by admin'
+    };
+    var EVENT_TONE = { login_failed: 'bad', blocked_domain: 'bad', proxy_dead: 'bad', rate_limited: 'warn', session_refused: 'warn', session_failover: 'warn', register: 'accent', proxy_recovered: 'ok', login: 'ok' };
+    function eventLabel(type) { return EVENT_LABELS[type] || type.replace(/_/g, ' '); }
     function eventsTable(list) {
         if (!list.length) return '<p class="muted">Nothing yet.</p>';
         return '<div class="table-wrap"><table><thead><tr><th>When</th><th>Event</th><th>User</th><th>Detail</th><th>IP</th></tr></thead><tbody>' +
             list.map(function (e) {
-                return '<tr><td>' + esc(P.formatDate(e.created_at)) + '</td><td><span class="badge">' + esc(e.type) + '</span></td><td>' + esc(e.username || '-') +
+                return '<tr><td>' + esc(P.formatDate(e.created_at)) + '</td><td><span class="badge ' + (EVENT_TONE[e.type] || '') + '" title="' + esc(e.type) + '">' + esc(eventLabel(e.type)) + '</span></td><td>' + esc(e.username || '-') +
                     '</td><td>' + esc(e.detail || '') + '</td><td class="small">' + esc(e.ip || '') + '</td></tr>';
             }).join('') + '</tbody></table></div>';
     }
@@ -147,23 +186,47 @@
     // ---------------------------------------------------------------- users --
     async function usersView() {
         await loadPools();
-        var list = await P.api('GET', '/api/admin/users');
-        view.innerHTML = '<section class="card"><div class="card-title"><h2>Users</h2><span class="spacer"></span><button type="button" class="primary small" id="add">Add user</button></div>' +
-            '<div class="table-wrap"><table><thead><tr><th>User</th><th>Role</th><th>Login</th><th>Pool</th><th>Limits</th><th>Last login</th><th></th></tr></thead><tbody>' +
+        var all = await P.api('GET', '/api/admin/users');
+        var pending = all.filter(function (u) { return u.pending; });
+        var list = all.filter(function (u) { return !u.pending; });
+        updatePendingBadge(pending.length);
+        view.innerHTML = (pending.length ? '<section class="card"><div class="card-title"><h2>Awaiting approval</h2><span class="count">' + pending.length + '</span></div>' +
+            '<ul class="list">' + pending.map(function (u) {
+                return '<li><span class="avatar">' + esc(u.username.charAt(0)) + '</span><div class="grow"><strong>' + esc(u.username) + '</strong><div class="meta">' +
+                    esc((u.email ? u.email + ' · ' : '') + 'signed up ' + P.timeAgo(u.created_at)) + '</div></div>' +
+                    '<div class="actions"><button type="button" class="small primary" data-approve="' + u.id + '">Approve</button><button type="button" class="small danger" data-reject="' + u.id + '">Reject</button></div></li>';
+            }).join('') + '</ul></section>' : '') +
+            '<section class="card"><div class="card-title"><h2>Users</h2><span class="spacer"></span><button type="button" class="primary small" id="add">Add user</button></div>' +
+            '<div class="table-wrap"><table><thead><tr><th>User</th><th>Role</th><th>Sign-in</th><th>Pool</th><th>Limits</th><th>Last login</th><th></th></tr></thead><tbody>' +
             list.map(function (u) {
-                return '<tr><td><strong>' + esc(u.username) + '</strong>' + (u.enabled ? '' : ' <span class="badge bad">disabled</span>') + (u.note ? '<div class="muted small">' + esc(u.note) + '</div>' : '') + '</td>' +
-                    '<td>' + esc(u.role) + '</td><td class="small">' + (u.has_password ? 'password ' : '') + (u.has_token ? 'code' : '') + '</td>' +
+                return '<tr><td><strong>' + esc(u.username) + '</strong>' + (u.enabled ? '' : ' <span class="badge bad">disabled</span>') + (u.email ? '<div class="muted small">' + esc(u.email) + '</div>' : '') + (u.note ? '<div class="muted small">' + esc(u.note) + '</div>' : '') + '</td>' +
+                    '<td>' + (u.role === 'admin' ? '<span class="badge accent plain">admin</span>' : 'user') + '</td><td class="small">' + [u.has_password ? 'password' : '', u.has_token ? 'access code' : ''].filter(Boolean).join(', ') + '</td>' +
                     '<td>' + esc(u.pool_id ? poolName(u.pool_id) : 'auto') + '</td>' +
                     '<td class="small">' + (u.rate_limit_rpm != null ? esc(u.rate_limit_rpm) + ' rpm' : 'default') + ' / ' + (u.bandwidth_limit_mb_day != null ? (u.bandwidth_limit_mb_day ? esc(u.bandwidth_limit_mb_day) + ' MB/day' : 'unlimited') : 'default') + '</td>' +
                     '<td class="small">' + esc(P.timeAgo(u.last_login_at)) + '</td>' +
                     '<td class="actions"><button type="button" class="small" data-edit="' + u.id + '">Edit</button> <button type="button" class="small" data-token="' + u.id + '">New code</button> <button type="button" class="small danger" data-del="' + u.id + '">Delete</button></td></tr>';
             }).join('') + '</tbody></table></div></section>';
 
+        on('[data-approve]', 'click', async function (btn) {
+            try {
+                var u = await P.api('POST', '/api/admin/users/' + btn.getAttribute('data-approve') + '/approve');
+                P.toast(u.username + ' can sign in now');
+                usersView();
+            } catch (err) { P.toast(err.message); }
+        });
+        on('[data-reject]', 'click', function (btn) {
+            confirmed('The sign-up request is deleted.', async function () {
+                await P.api('DELETE', '/api/admin/users/' + btn.getAttribute('data-reject'));
+                P.toast('Request rejected');
+                usersView();
+            }, { title: 'Reject this sign-up?', confirmLabel: 'Reject', danger: true });
+        });
         P.$('#add').addEventListener('click', function () {
             openForm({
                 title: 'Add user',
                 fields: [
                     { name: 'username', label: 'Username' },
+                    { name: 'email', label: 'E-mail (optional)', type: 'email' },
                     { name: 'password', label: 'Password', type: 'password', hint: 'At least 8 characters. Leave empty to use an access code only.' },
                     { name: 'generateToken', label: 'Generate an access code (log in without username)', type: 'checkbox' },
                     { name: 'role', label: 'Role', type: 'select', value: 'user', options: [{ value: 'user', label: 'User' }, { value: 'admin', label: 'Admin' }] },
@@ -224,12 +287,17 @@
         await loadPools();
         view.innerHTML = '<section class="card"><div class="card-title"><h2>Proxy pools</h2><span class="spacer"></span><button type="button" class="primary small" id="add">Add pool</button></div>' +
             '<p class="muted small">Each browsing session is locked to ONE proxy of its pool until it ends (sticky sessions). Pool choice: user override, then the matching site, then the default pool.</p>' +
-            (state.pools.length ? '<div class="table-wrap"><table><thead><tr><th>Pool</th><th>Type</th><th>Proxies</th><th>Usable</th><th>Active sessions</th><th></th></tr></thead><tbody>' +
+            (state.pools.length ? '<div class="table-wrap"><table><thead><tr><th>Pool</th><th>Type</th><th>Who can use it</th><th>Proxies</th><th>Usable</th><th>Sessions</th><th></th></tr></thead><tbody>' +
                 state.pools.map(function (p) {
-                    return '<tr><td><strong>' + esc(p.name) + '</strong>' + (p.is_default ? ' <span class="badge ok">default</span>' : '') + (p.country ? ' <span class="badge">' + esc(p.country) + '</span>' : '') + '</td>' +
-                        '<td>' + esc(p.type) + '</td><td>' + p.proxy_count + '</td><td>' + p.usable_count + '</td><td>' + p.active_sessions + '</td>' +
-                        '<td class="actions"><button type="button" class="small primary" data-open="' + p.id + '">Proxies</button> <button type="button" class="small" data-edit="' + p.id + '">Edit</button> <button type="button" class="small danger" data-del="' + p.id + '">Delete</button></td></tr>';
-                }).join('') + '</tbody></table></div>' : '<p class="muted">No pools yet. Add one, then import your proxy list.</p>') +
+                    var who = p.owner_user_id ? '<span class="badge plain">personal · ' + esc(p.owner_username) + '</span>'
+                        : p.visibility === 'all' ? '<span class="badge ok plain">all users</span>'
+                        : '<span class="badge warn plain">' + p.assigned_count + ' assigned user' + (p.assigned_count === 1 ? '' : 's') + '</span>';
+                    return '<tr><td><strong>' + esc(p.name) + '</strong>' + (p.is_default ? ' <span class="badge ok">default</span>' : '') + (p.country ? ' <span class="badge plain">' + esc(p.country) + '</span>' : '') + '</td>' +
+                        '<td>' + esc(p.type) + '</td><td>' + who + '</td><td>' + p.proxy_count + '</td><td>' + p.usable_count + '</td><td>' + p.active_sessions + '</td>' +
+                        '<td class="actions"><button type="button" class="small primary" data-open="' + p.id + '">Proxies</button>' +
+                        (p.owner_user_id ? '' : ' <button type="button" class="small" data-access="' + p.id + '">Users</button> <button type="button" class="small" data-edit="' + p.id + '">Edit</button>') +
+                        ' <button type="button" class="small danger" data-del="' + p.id + '">Delete</button></td></tr>';
+                }).join('') + '</tbody></table></div>' : '<div class="empty"><strong>No pools yet</strong>Add a pool, then import your proxy list.</div>') +
             '</section><div id="pool-detail"></div>';
 
         P.$('#add').addEventListener('click', function () { poolForm(null); });
@@ -241,6 +309,7 @@
             });
         });
         on('[data-open]', 'click', function (btn) { poolDetail(Number(btn.getAttribute('data-open'))); });
+        on('[data-access]', 'click', function (btn) { poolAccess(state.pools.find(function (p) { return p.id === Number(btn.getAttribute('data-access')); })); });
         if (state.pools.length === 1) poolDetail(state.pools[0].id);
     }
 
@@ -252,11 +321,34 @@
                 { name: 'type', label: 'Type', type: 'select', value: p ? p.type : 'residential', options: state.poolTypes.map(function (t) { return { value: t, label: t }; }) },
                 { name: 'country', label: 'Country tag', value: p && p.country, placeholder: 'US' },
                 { name: 'description', label: 'Description', value: p && p.description },
+                { name: 'visibility', label: 'Who can use this pool', type: 'select', value: p ? p.visibility : 'all', options: [{ value: 'all', label: 'All users' }, { value: 'assigned', label: 'Only users I assign (use the Users button)' }] },
                 { name: 'isDefault', label: 'Default pool (used when no user/site rule matches)', type: 'checkbox', value: p ? !!p.is_default : state.pools.length === 0 }
             ],
             onSubmit: async function (v) {
                 if (p) await P.api('PUT', '/api/admin/pools/' + p.id, v);
                 else await P.api('POST', '/api/admin/pools', v);
+                poolsView();
+            }
+        });
+    }
+
+    /** Assign an admin pool to specific users ("allow to the users"). */
+    async function poolAccess(pool) {
+        var users = await P.api('GET', '/api/admin/users');
+        var access = await P.api('GET', '/api/admin/pools/' + pool.id + '/access');
+        openForm({
+            title: 'Users of ' + pool.name,
+            fields: [
+                { type: 'info', name: 'i', html: '<p class="muted small">' + (pool.visibility === 'all'
+                    ? 'This pool is currently visible to <strong>all users</strong>. Assignments matter once you set it to "Only users I assign" (Edit).'
+                    : 'Only the users ticked below (and admins) can browse through this pool.') + '</p>' },
+                { name: 'userIds', label: 'Allowed users', type: 'users', value: access.userIds,
+                  options: users.filter(function (u) { return u.role !== 'admin' && !u.pending; }).map(function (u) { return { value: u.id, label: u.username + (u.email ? ' (' + u.email + ')' : '') }; }) }
+            ],
+            submitLabel: 'Save access',
+            onSubmit: async function (v) {
+                await P.api('PUT', '/api/admin/pools/' + pool.id + '/access', { userIds: v.userIds });
+                P.toast('Access saved');
                 poolsView();
             }
         });
@@ -272,7 +364,7 @@
                 proxies.map(function (x) {
                     return '<tr><td class="small"><code>' + esc(x.protocol + '://' + (x.username ? x.username + ':***@' : '') + x.host + ':' + x.port) + '</code>' +
                         (x.last_error ? '<div class="muted small">' + esc(x.last_error) + '</div>' : '') + '</td>' +
-                        '<td>' + (x.enabled ? badge(x.status) : '<span class="badge">disabled</span>') + '</td>' +
+                        '<td>' + (!x.enabled ? '<span class="badge">Disabled</span>' : x.status === 'unknown' && x.last_error ? '<span class="badge warn">Not responding</span>' : badge(x.status)) + '</td>' +
                         '<td>' + (x.latency_ms != null ? x.latency_ms + ' ms' : '-') + '</td><td>' + x.active_sessions + '</td>' +
                         '<td class="small">' + esc(P.timeAgo(x.last_checked_at)) + '</td>' +
                         '<td class="actions"><button type="button" class="small" data-toggle="' + x.id + '" data-enabled="' + x.enabled + '">' + (x.enabled ? 'Disable' : 'Enable') + '</button> <button type="button" class="small danger" data-remove="' + x.id + '">Remove</button></td></tr>';
@@ -450,6 +542,10 @@
         view.innerHTML = '<section class="card"><h2>Settings</h2><div id="settings-form"></div></section>';
         var fields = [
             { name: 'portal_title', label: 'Portal title', value: s.portal_title },
+            { name: 'registration_mode', label: 'Sign-up', type: 'select', value: s.registration_mode, options: [{ value: 'approval', label: 'Open, but I approve each new account (recommended)' }, { value: 'open', label: 'Open - new accounts can browse immediately' }, { value: 'closed', label: 'Closed - only admins create accounts' }] },
+            { name: 'user_proxies_enabled', label: 'Users may add their own proxies ("My proxies")', type: 'checkbox', value: s.user_proxies_enabled },
+            { name: 'max_proxies_per_user', label: 'Max own proxies per user', type: 'number', value: s.max_proxies_per_user },
+            { name: 'show_portal_button', label: 'Show a small "Portal" button on proxied pages (way back on iPhone)', type: 'checkbox', value: s.show_portal_button },
             { name: 'portal_notice', label: 'Landing page notice', value: s.portal_notice, hint: 'Optional message shown to all users.' },
             { name: 'allowlist_enabled', label: 'Domain allowlist: only allow configured sites + extra domains', type: 'checkbox', value: s.allowlist_enabled },
             { name: 'allowlist_extra', label: 'Extra allowed domains', type: 'textarea', value: s.allowlist_extra, hint: 'One pattern per line or comma separated, e.g. *.example.com' },
@@ -497,6 +593,6 @@
         if (location.hash !== '#' + tab) history.replaceState(null, '', '#' + tab);
     }
     P.$all('#tabs button').forEach(function (b) { b.addEventListener('click', function () { show(b.getAttribute('data-tab')); }); });
-    P.$('#logout').addEventListener('click', P.logout);
+    P.$('#logout').addEventListener('click', function () { P.logout(false); });
     show(location.hash.slice(1) || 'dashboard');
 })();

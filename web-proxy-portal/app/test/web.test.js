@@ -142,3 +142,78 @@ test('disabled user is logged out immediately', async () => {
     users.update(id, { enabled: false });
     assert.equal((await c.req('GET', '/api/portal/sessions')).status, 401);
 });
+
+test('sign-up -> pending -> admin approves -> sign in -> change password -> sign out', async () => {
+    const anon = client();
+    await anon.req('GET', '/register');
+    const reg = await anon.req('POST', '/api/auth/register', { username: 'signup1', email: 's1@example.com', password: 'signuppass1', confirmPassword: 'signuppass1' });
+    assert.equal(reg.status, 200, JSON.stringify(reg.json));
+    assert.equal(reg.json.pending, true, 'default mode needs approval');
+    const early = await anon.req('POST', '/api/auth/login', { username: 'signup1', password: 'signuppass1' });
+    assert.equal(early.status, 403);
+    assert.equal(early.json.reason, 'pending');
+
+    const admin = client();
+    await admin.req('GET', '/login');
+    await admin.req('POST', '/api/auth/login', { username: 'admin1', password: 'adminpass123' });
+    const pendingUser = (await admin.req('GET', '/api/admin/users')).json.find((u) => u.username === 'signup1');
+    assert.equal(pendingUser.pending, 1);
+    assert.equal((await admin.req('POST', `/api/admin/users/${pendingUser.id}/approve`)).status, 200);
+
+    const ok = await anon.req('POST', '/api/auth/login', { username: 'signup1', password: 'signuppass1' });
+    assert.equal(ok.status, 200);
+    assert.equal((await anon.req('POST', '/api/auth/password', { currentPassword: 'wrong', newPassword: 'whatever12' })).status, 400);
+    assert.equal((await anon.req('POST', '/api/auth/password', { currentPassword: 'signuppass1', newPassword: 'newsignup12' })).status, 200);
+    assert.equal((await anon.req('GET', '/api/portal/sessions')).status, 200, 'still signed in on this device after password change');
+    await anon.req('POST', '/api/auth/logout', {});
+    assert.equal((await anon.req('GET', '/api/portal/sessions')).status, 401, 'signed out');
+
+    // closed / open modes
+    await admin.req('PUT', '/api/admin/settings', { registration_mode: 'closed' });
+    const closed = client();
+    await closed.req('GET', '/register');
+    const rc = await closed.req('POST', '/api/auth/register', { username: 'signup2', password: 'signuppass2' });
+    assert.equal(rc.status, 403);
+    assert.match(rc.json.error, /closed/);
+    await admin.req('PUT', '/api/admin/settings', { registration_mode: 'open' });
+    const open = client();
+    await open.req('GET', '/register');
+    const r2 = await open.req('POST', '/api/auth/register', { username: 'signup3', password: 'signuppass3' });
+    assert.equal(r2.json.pending, false);
+    assert.equal((await open.req('GET', '/api/portal/sessions')).status, 200, 'open mode signs in immediately');
+    await admin.req('PUT', '/api/admin/settings', { registration_mode: 'approval' });
+});
+
+test('users manage their own proxies; admins share pools with chosen users', async () => {
+    const admin = client();
+    await admin.req('GET', '/login');
+    await admin.req('POST', '/api/auth/login', { username: 'admin1', password: 'adminpass123' });
+    const pool = (await admin.req('POST', '/api/admin/pools', { name: 'Assigned only', visibility: 'assigned' })).json;
+    const user1 = (await admin.req('GET', '/api/admin/users')).json.find((u) => u.username === 'user1');
+    await admin.req('PUT', `/api/admin/pools/${pool.id}/access`, { userIds: [user1.id] });
+
+    const u = client();
+    await u.req('GET', '/login');
+    await u.req('POST', '/api/auth/login', { username: 'user1', password: 'userpass123' });
+    const visible = (await u.req('GET', '/api/portal/pools')).json.map((p) => p.name);
+    assert.ok(visible.includes('Assigned only'));
+
+    const add = await u.req('POST', '/api/portal/proxies', { text: 'http://a:b@127.0.0.1:3000\n9.9.9.9:8080:a:b' });
+    assert.equal(add.status, 200);
+    assert.equal(add.json.added, 1);
+    assert.match(add.json.errors[0], /private/);
+    const mine = (await u.req('GET', '/api/portal/proxies')).json;
+    assert.equal(mine.proxies.length, 1);
+    assert.equal(mine.proxies[0].password, undefined, 'password never returned');
+    assert.ok((await u.req('GET', '/api/portal/pools')).json.some((p) => p.personal && p.name === 'My proxies'));
+
+    // another user can neither see nor delete it, nor use the assigned pool
+    const other = client();
+    await other.req('GET', '/login');
+    await other.req('POST', '/api/auth/login', { username: 'signup3', password: 'signuppass3' });
+    assert.equal((await other.req('DELETE', `/api/portal/proxies/${mine.proxies[0].id}`)).status, 404);
+    assert.equal((await other.req('POST', '/api/portal/browse', { url: 'example.com', poolId: pool.id })).status, 403);
+    assert.ok(!(await other.req('GET', '/api/portal/pools')).json.some((p) => p.name === 'Assigned only'));
+
+    assert.equal((await u.req('DELETE', `/api/portal/proxies/${mine.proxies[0].id}`)).status, 200);
+});

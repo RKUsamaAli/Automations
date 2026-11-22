@@ -2,10 +2,18 @@
 /**
  * Upstream proxy pools and proxies.
  *
- * Selection rules (see resolvePoolId):
- *   1. the user's own pool override (users.pool_id)
- *   2. the pool of the configured site whose domains match the start URL
- *   3. the pool marked "default"
+ * Two kinds of pools:
+ *   - ADMIN pools (owner_user_id NULL): visibility 'all' = every user may use it,
+ *     'assigned' = only users listed in pool_access ("allow to users").
+ *   - PERSONAL pools (owner_user_id = user): proxies a user added under
+ *     "My proxies". Only that user can use them.
+ *
+ * Selection rules for a new session (see resolvePoolId):
+ *   1. the pool the user picked on the landing page (if they may use it)
+ *   2. the user's pool override set by an admin (users.pool_id)
+ *   3. the pool of the configured site whose domains match the start URL
+ *   4. the pool marked "default"
+ *   5. the user's personal pool
  *
  * Within a pool we pick the healthy proxy with the FEWEST active sessions,
  * so load is spread evenly. The chosen proxy is stored on the session and
@@ -14,23 +22,134 @@
 const db = require('../db');
 const TtlCache = require('../lib/ttlCache');
 const { parseProxyList } = require('../lib/proxyString');
+const { assertPublicHost } = require('../lib/netGuard');
 const { matchesAny, hostOf } = require('../lib/domainMatch');
 
 const POOL_TYPES = ['residential', 'isp', 'datacenter', 'mobile', 'other'];
 const cache = new TtlCache(10000);
 
 // ---------------------------------------------------------------- pools ----
+const POOL_STATS = `
+    (SELECT COUNT(*) FROM proxies x WHERE x.pool_id = p.id) AS proxy_count,
+    (SELECT COUNT(*) FROM proxies x WHERE x.pool_id = p.id AND x.enabled = 1 AND x.status IN ('healthy','unknown','slow')) AS usable_count,
+    (SELECT COUNT(*) FROM sessions s WHERE s.pool_id = p.id AND s.ended_at IS NULL) AS active_sessions`;
+
+/** All pools (admin view), with owner and number of users it is assigned to. */
 function listPools() {
     return db
         .get()
         .prepare(
-            `SELECT p.*,
-                (SELECT COUNT(*) FROM proxies x WHERE x.pool_id = p.id) AS proxy_count,
-                (SELECT COUNT(*) FROM proxies x WHERE x.pool_id = p.id AND x.enabled = 1 AND x.status IN ('healthy','unknown')) AS usable_count,
-                (SELECT COUNT(*) FROM sessions s WHERE s.pool_id = p.id AND s.ended_at IS NULL) AS active_sessions
-             FROM proxy_pools p ORDER BY p.is_default DESC, p.name`
+            `SELECT p.*, ${POOL_STATS}, u.username AS owner_username,
+                (SELECT COUNT(*) FROM pool_access a WHERE a.pool_id = p.id) AS assigned_count
+             FROM proxy_pools p LEFT JOIN users u ON u.id = p.owner_user_id
+             ORDER BY (p.owner_user_id IS NOT NULL), p.is_default DESC, p.name`
         )
         .all();
+}
+
+/** Pools a user may browse through: shared admin pools, pools assigned to them, their own. */
+function listAccessiblePools(user) {
+    return db
+        .get()
+        .prepare(
+            `SELECT p.id, p.name, p.country, p.type, p.is_default, p.owner_user_id, ${POOL_STATS}
+             FROM proxy_pools p
+             WHERE (p.owner_user_id IS NULL AND (p.visibility = 'all' OR EXISTS (SELECT 1 FROM pool_access a WHERE a.pool_id = p.id AND a.user_id = ?)))
+                OR p.owner_user_id = ?
+             ORDER BY (p.owner_user_id IS NOT NULL), p.is_default DESC, p.name`
+        )
+        .all(user.id, user.id);
+}
+
+function canUsePool(user, poolId) {
+    if (!user || !poolId) return false;
+    if (user.role === 'admin') return !!getPool(poolId);
+    const p = getPool(poolId);
+    if (!p) return false;
+    if (p.owner_user_id) return p.owner_user_id === user.id;
+    if (p.visibility === 'all') return true;
+    if (user.pool_id === p.id) return true; // admin-set override
+    return !!db.get().prepare('SELECT 1 FROM pool_access WHERE pool_id = ? AND user_id = ?').get(poolId, user.id);
+}
+
+function getPoolAccess(poolId) {
+    return db.get().prepare('SELECT user_id FROM pool_access WHERE pool_id = ?').all(poolId).map((r) => r.user_id);
+}
+
+/** Replaces the list of users an admin pool is assigned to. */
+function setPoolAccess(poolId, userIds) {
+    const conn = db.get();
+    const ids = [...new Set((userIds || []).map(Number).filter(Boolean))];
+    conn.transaction(() => {
+        conn.prepare('DELETE FROM pool_access WHERE pool_id = ?').run(poolId);
+        const ins = conn.prepare('INSERT INTO pool_access (pool_id, user_id, created_at) VALUES (?, ?, ?)');
+        for (const id of ids) ins.run(poolId, id, Date.now());
+    })();
+    cache.clear();
+    return getPoolAccess(poolId);
+}
+
+/** The user's personal pool, created on first use. */
+function getOrCreatePersonalPool(user) {
+    const conn = db.get();
+    const existing = conn.prepare('SELECT * FROM proxy_pools WHERE owner_user_id = ? ORDER BY id LIMIT 1').get(user.id);
+    if (existing) return existing;
+    const id = conn
+        .prepare("INSERT INTO proxy_pools (name, type, is_default, owner_user_id, visibility, description, created_at) VALUES (?, 'other', 0, ?, 'assigned', ?, ?)")
+        .run(`${user.username} - personal`, user.id, 'Proxies added by the user', Date.now()).lastInsertRowid;
+    cache.clear();
+    return getPool(id);
+}
+
+function getPersonalPool(userId) {
+    return db.get().prepare('SELECT * FROM proxy_pools WHERE owner_user_id = ? ORDER BY id LIMIT 1').get(userId) || null;
+}
+
+function countUserProxies(userId) {
+    return db
+        .get()
+        .prepare('SELECT COUNT(*) AS n FROM proxies x JOIN proxy_pools p ON p.id = x.pool_id WHERE p.owner_user_id = ?')
+        .get(userId).n;
+}
+
+/**
+ * Adds proxies to a user's personal pool. Every host must be public (no SSRF
+ * into the server's own network), and the per-user limit applies.
+ */
+async function importUserProxies(user, text, defaultProtocol, maxPerUser) {
+    const { proxies, errors } = parseProxyList(text, defaultProtocol);
+    if (!proxies.length && !errors.length) throw new Error('Paste at least one proxy');
+    const room = Math.max(0, maxPerUser - countUserProxies(user.id));
+    const accepted = [];
+    for (const p of proxies) {
+        if (accepted.length >= room) {
+            errors.push(`${p.host}:${p.port}: limit of ${maxPerUser} proxies reached`);
+            continue;
+        }
+        try {
+            await assertPublicHost(p.host);
+            accepted.push(p);
+        } catch (e) {
+            errors.push(`${p.host}:${p.port}: ${e.message}`);
+        }
+    }
+    if (!accepted.length) return { added: 0, skipped: 0, errors };
+    const pool = getOrCreatePersonalPool(user);
+    const lines = accepted
+        .map((p) => `${p.protocol}://${p.username ? encodeURIComponent(p.username) + ':' + encodeURIComponent(p.password || '') + '@' : ''}${p.host.includes(':') ? '[' + p.host + ']' : p.host}:${p.port}`)
+        .join('\n');
+    const result = importProxies(pool.id, lines);
+    return { ...result, errors: [...errors, ...result.errors], poolId: pool.id };
+}
+
+/** Proxy row (no secrets) if it belongs to the user's personal pool. */
+function getOwnedProxy(userId, proxyId) {
+    return (
+        db
+            .get()
+            .prepare(`SELECT x.id, x.pool_id FROM proxies x JOIN proxy_pools p ON p.id = x.pool_id WHERE x.id = ? AND p.owner_user_id = ?`)
+            .get(proxyId, userId) || null
+    );
 }
 
 function getPool(id) {
@@ -41,28 +160,31 @@ function getPoolByName(name) {
     return db.get().prepare('SELECT * FROM proxy_pools WHERE name = ?').get(name) || null;
 }
 
-function savePool({ id, name, country = null, type = 'datacenter', isDefault = false, description = null }) {
+/** Creates/updates an ADMIN pool. visibility: 'all' | 'assigned'. */
+function savePool({ id, name, country = null, type = 'datacenter', isDefault = false, description = null, visibility = 'all' }) {
     if (!name || String(name).length > 80) throw new Error('Pool name is required (max 80 chars)');
     if (!POOL_TYPES.includes(type)) throw new Error(`Pool type must be one of: ${POOL_TYPES.join(', ')}`);
+    if (!['all', 'assigned'].includes(visibility)) throw new Error('Visibility must be "all" or "assigned"');
     const conn = db.get();
     const tx = conn.transaction(() => {
         if (isDefault) conn.prepare('UPDATE proxy_pools SET is_default = 0').run();
         if (id) {
-            conn.prepare('UPDATE proxy_pools SET name = ?, country = ?, type = ?, is_default = ?, description = ? WHERE id = ?').run(
+            conn.prepare('UPDATE proxy_pools SET name = ?, country = ?, type = ?, is_default = ?, description = ?, visibility = ? WHERE id = ? AND owner_user_id IS NULL').run(
                 name,
                 country || null,
                 type,
                 isDefault ? 1 : 0,
                 description || null,
+                visibility,
                 id
             );
             return id;
         }
-        // The very first pool automatically becomes the default.
-        const first = conn.prepare('SELECT COUNT(*) AS n FROM proxy_pools').get().n === 0;
+        // The very first admin pool automatically becomes the default.
+        const first = conn.prepare('SELECT COUNT(*) AS n FROM proxy_pools WHERE owner_user_id IS NULL').get().n === 0;
         return conn
-            .prepare('INSERT INTO proxy_pools (name, country, type, is_default, description, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-            .run(name, country || null, type, isDefault || first ? 1 : 0, description || null, Date.now()).lastInsertRowid;
+            .prepare('INSERT INTO proxy_pools (name, country, type, is_default, description, visibility, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+            .run(name, country || null, type, isDefault || first ? 1 : 0, description || null, visibility, Date.now()).lastInsertRowid;
     });
     try {
         const poolId = tx();
@@ -172,25 +294,30 @@ function recordHealth(id, { ok, latencyMs, error, slowMs, failuresBeforeDead }) 
 // ------------------------------------------------------------ selection ----
 function defaultPoolId() {
     return cache.get('defaultPool', () => {
-        const row = db.get().prepare('SELECT id FROM proxy_pools WHERE is_default = 1 LIMIT 1').get();
+        const row = db.get().prepare('SELECT id FROM proxy_pools WHERE is_default = 1 AND owner_user_id IS NULL LIMIT 1').get();
         return row ? row.id : null;
     });
 }
 
 /**
- * Decides which pool a new session uses.
+ * Decides which pool a new session uses (order documented at the top of this file).
  * @param {object} user  row from users service
  * @param {string} startUrl
  * @param {object[]} sites enabled sites
+ * @param {number} [requestedPoolId] pool picked by the user on the landing page
  */
-function resolvePoolId(user, startUrl, sites) {
+function resolvePoolId(user, startUrl, sites, requestedPoolId = null) {
+    if (requestedPoolId && canUsePool(user, requestedPoolId)) return Number(requestedPoolId);
     if (user && user.pool_id) return user.pool_id;
     const host = hostOf(startUrl);
     if (host) {
         const site = sites.find((s) => s.pool_id && matchesAny(host, s.domains));
-        if (site) return site.pool_id;
+        if (site && (!user || !user.id || canUsePool(user, site.pool_id))) return site.pool_id;
     }
-    return defaultPoolId();
+    const def = defaultPoolId();
+    if (def && (!user || !user.id || canUsePool(user, def))) return def;
+    const personal = user && user.id ? getPersonalPool(user.id) : null;
+    return personal ? personal.id : null;
 }
 
 /**
@@ -222,6 +349,15 @@ function isUsable(proxy) {
 module.exports = {
     POOL_TYPES,
     listPools,
+    listAccessiblePools,
+    canUsePool,
+    getPoolAccess,
+    setPoolAccess,
+    getOrCreatePersonalPool,
+    getPersonalPool,
+    countUserProxies,
+    importUserProxies,
+    getOwnedProxy,
     getPool,
     getPoolByName,
     savePool,

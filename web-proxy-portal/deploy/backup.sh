@@ -47,7 +47,8 @@ tar -czf "$ARCHIVE" -C "$WORK" portal.db .env deploy.env
 chown "$APP_USER:$APP_USER" "$ARCHIVE"
 chmod 600 "$ARCHIVE"
 
-ls -1t "$SHARED_DIR"/backups/daily-*.tar.gz 2>/dev/null | tail -n +$(( KEEP_DB_BACKUPS + 1 )) | xargs -r rm -f
+find "$SHARED_DIR/backups" -maxdepth 1 -name 'daily-*.tar.gz' -printf '%T@ %p\n' 2>/dev/null \
+    | sort -rn | tail -n +$(( KEEP_DB_BACKUPS + 1 )) | cut -d' ' -f2- | xargs -r rm -f || true
 
 (( QUIET )) || ok "Backup written: $ARCHIVE ($(du -h "$ARCHIVE" | cut -f1))"
 (( QUIET )) && echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] backup ok: $ARCHIVE"

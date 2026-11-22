@@ -47,8 +47,8 @@ async function settingsFor(proxy) {
  * Chooses the proxy for a NEW session.
  * @returns {{ poolId:number|null, proxy:object|null, error?:string }}
  */
-function chooseForNewSession(user, startUrl, enabledSites) {
-    const poolId = pools.resolvePoolId(user, startUrl, enabledSites);
+function chooseForNewSession(user, startUrl, enabledSites, requestedPoolId = null) {
+    const poolId = pools.resolvePoolId(user, startUrl, enabledSites, requestedPoolId);
     const proxy = pools.pickProxy(poolId);
     if (!proxy && settings.get('upstream_fallback') !== 'direct') {
         return {

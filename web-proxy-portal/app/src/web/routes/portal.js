@@ -3,18 +3,29 @@
  * User-facing API (landing page).
  *
  *   GET    /api/portal/sites            sites shown as tiles
+ *   GET    /api/portal/pools            proxy pools I may browse through (picker)
  *   GET    /api/portal/sessions         my active browsing sessions
- *   POST   /api/portal/browse           { url } | { siteId } | { sessionId }  -> { redirect }
+ *   POST   /api/portal/browse           { url | siteId | sessionId, poolId? }  -> { redirect }
  *   DELETE /api/portal/sessions/:id     end one of my sessions
+ *
+ *   My proxies (setting user_proxies_enabled):
+ *   GET    /api/portal/proxies          my proxies + limit
+ *   POST   /api/portal/proxies          { text, defaultProtocol }  import into my personal pool
+ *   POST   /api/portal/proxies/check    health-check my proxies now
+ *   PATCH  /api/portal/proxies/:id      { enabled }
+ *   DELETE /api/portal/proxies/:id
  */
 const express = require('express');
 const config = require('../../config');
 const sites = require('../../services/sites');
 const sessions = require('../../services/sessions');
+const pools = require('../../services/pools');
+const healthCheck = require('../../jobs/healthCheck');
 const settings = require('../../services/settings');
 const events = require('../../services/events');
 const { hostOf } = require('../../lib/domainMatch');
 const { mintTicket } = require('../../lib/authTokens');
+const { isPrivateHost } = require('../../lib/netGuard');
 
 const router = express.Router();
 
@@ -37,28 +48,27 @@ function normalizeUrl(input) {
     return u.toString();
 }
 
-function isPrivateHost(host) {
-    const h = host.toLowerCase().replace(/^\[|\]$/g, '');
-    if (h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.internal') || h.endsWith('.local')) return true;
-    if (h === config.appDomain || h === config.proxyDomain) return true;
-    const m = h.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
-    if (m) {
-        const [a, b] = [Number(m[1]), Number(m[2])];
-        return a === 10 || a === 127 || a === 0 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127);
-    }
-    if (h.includes(':')) {
-        // IPv6 literal: loopback, unique-local (fc00::/7), link-local (fe80::/10)
-        return h === '::1' || h === '::' || /^f[cd]/.test(h) || /^fe[89ab]/.test(h) || h.startsWith('::ffff:');
-    }
-    return false;
-}
-
 router.get('/sites', (_req, res) => {
     res.json(
         sites
             .listEnabled()
             .filter((s) => s.show_on_landing)
             .map((s) => ({ id: s.id, name: s.name, startUrl: s.start_url, host: hostOf(s.start_url) }))
+    );
+});
+
+router.get('/pools', (req, res) => {
+    res.json(
+        pools.listAccessiblePools(req.user).map((p) => ({
+            id: p.id,
+            name: p.owner_user_id ? 'My proxies' : p.name,
+            country: p.country,
+            type: p.type,
+            personal: !!p.owner_user_id,
+            isDefault: !!p.is_default,
+            usable: p.usable_count,
+            total: p.proxy_count
+        }))
     );
 });
 
@@ -69,6 +79,10 @@ router.get('/sessions', (req, res) => {
 router.post('/browse', (req, res) => {
     const { url, siteId, sessionId } = req.body || {};
     const user = req.user;
+    const poolId = req.body && req.body.poolId ? Number(req.body.poolId) : null;
+    if (poolId && !pools.canUsePool(user, poolId)) {
+        return res.status(403).json({ error: 'You are not allowed to use that proxy pool.' });
+    }
 
     // Resume an existing session (keeps the site's cookies/logins).
     if (sessionId) {
@@ -103,7 +117,7 @@ router.post('/browse', (req, res) => {
         return res.status(429).json({ error: `You already have ${max} active sessions. End one before starting another.` });
     }
 
-    const ticket = mintTicket({ uid: user.id, v: user.token_version, url: target });
+    const ticket = mintTicket({ uid: user.id, v: user.token_version, url: target, pool: poolId });
     res.json({ redirect: `${config.proxyBaseUrl}/__portal/start?t=${encodeURIComponent(ticket)}` });
 });
 
@@ -120,6 +134,57 @@ router.delete('/sessions/:id', (req, res) => {
     if (!s || s.user_id !== req.user.id) return res.status(404).json({ error: 'Session not found' });
     sessions.requestEnd(s.id);
     events.record('session_end_requested', { userId: req.user.id, detail: s.id.slice(0, 8), ip: req.ip });
+    res.json({ ok: true });
+});
+
+// ------------------------------------------------------------ my proxies ----
+function requireUserProxies(_req, res, next) {
+    if (!settings.get('user_proxies_enabled')) return res.status(403).json({ error: 'Adding your own proxies is disabled by the administrator.' });
+    next();
+}
+
+router.get('/proxies', requireUserProxies, (req, res) => {
+    const pool = pools.getPersonalPool(req.user.id);
+    res.json({
+        limit: settings.get('max_proxies_per_user'),
+        poolId: pool ? pool.id : null,
+        proxies: pool ? pools.listProxies(pool.id) : []
+    });
+});
+
+router.post('/proxies', requireUserProxies, async (req, res) => {
+    const { text, defaultProtocol } = req.body || {};
+    try {
+        const result = await pools.importUserProxies(req.user, text, defaultProtocol === 'socks5' ? 'socks5' : 'http', settings.get('max_proxies_per_user'));
+        if (result.added) {
+            events.record('user_proxies_added', { userId: req.user.id, detail: `+${result.added}`, ip: req.ip });
+            healthCheck.checkAll({ poolId: result.poolId }).catch(() => {});
+        }
+        res.json(result);
+    } catch (e) {
+        res.status(400).json({ error: e.message });
+    }
+});
+
+router.post('/proxies/check', requireUserProxies, async (req, res) => {
+    const pool = pools.getPersonalPool(req.user.id);
+    if (!pool) return res.json({ checked: 0 });
+    const result = await healthCheck.checkAll({ poolId: pool.id });
+    if (result.skipped) return res.status(409).json({ error: 'A check is already running, try again in a moment.' });
+    res.json(result);
+});
+
+router.patch('/proxies/:id', requireUserProxies, (req, res) => {
+    const owned = pools.getOwnedProxy(req.user.id, Number(req.params.id));
+    if (!owned) return res.status(404).json({ error: 'Proxy not found' });
+    pools.setProxyEnabled(owned.id, !!(req.body || {}).enabled);
+    res.json({ ok: true });
+});
+
+router.delete('/proxies/:id', requireUserProxies, (req, res) => {
+    const owned = pools.getOwnedProxy(req.user.id, Number(req.params.id));
+    if (!owned) return res.status(404).json({ error: 'Proxy not found' });
+    pools.deleteProxy(owned.id);
     res.json({ ok: true });
 });
 

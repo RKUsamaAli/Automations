@@ -13,9 +13,9 @@ function loadUser(req, _res, next) {
     req.user = null;
     const payload = readLogin(req.cookies[COOKIE_LOGIN]);
     if (payload) {
-        const user = users.getByIdCached(payload.uid);
+        const user = users.getForToken(payload.uid, payload.v);
         // token_version mismatch = password changed / user disabled / "log out everywhere"
-        if (user && user.enabled && user.token_version === payload.v) req.user = user;
+        if (user && user.enabled && !user.pending && user.token_version === payload.v) req.user = user;
     }
     next();
 }

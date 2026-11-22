@@ -100,7 +100,7 @@ Other measures:
 | SSRF to the server / LAN | Private, loopback, link-local and own hostnames rejected as start URLs |
 | User IP leaking to target sites | `X-Forwarded-For`, `X-Real-IP`, `Forwarded`, `CF-*` stripped before proxying |
 | Stolen passwords | scrypt hashes; access codes stored as SHA-256 only, shown once |
-| Disabled user keeps access | `token_version` bump invalidates all cookies within 15 s, sessions ended |
+| Disabled user keeps access | `token_version` bump invalidates all cookies within ~3 s, sessions ended |
 | XSS in the portal | Strict CSP (`script-src 'self'`, no inline), all output escaped |
 
 ## Data model (SQLite)

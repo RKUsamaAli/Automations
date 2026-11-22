@@ -7,12 +7,12 @@ const db = require('../db');
 const { hashPassword, verifyPassword, randomToken, sha256 } = require('../lib/crypto');
 const TtlCache = require('../lib/ttlCache');
 
-const PUBLIC_FIELDS = `id, username, role, enabled, pool_id, rate_limit_rpm, bandwidth_limit_mb_day,
+const PUBLIC_FIELDS = `id, username, email, role, enabled, pending, pool_id, rate_limit_rpm, bandwidth_limit_mb_day,
     token_version, note, created_at, last_login_at,
     (password_hash IS NOT NULL) AS has_password, (access_token_hash IS NOT NULL) AS has_token`;
 
 // Short cache used by the proxy engine on every request.
-const cache = new TtlCache(15000);
+const cache = new TtlCache(3000); // disabled users / logouts take effect within ~3 s
 
 function getById(id) {
     return db.get().prepare(`SELECT ${PUBLIC_FIELDS} FROM users WHERE id = ?`).get(id) || null;
@@ -20,6 +20,21 @@ function getById(id) {
 
 function getByIdCached(id) {
     return cache.get(id, () => getById(id));
+}
+
+/**
+ * Cached user for a login/proxy cookie carrying token_version `v`.
+ * With several processes (WEB_INSTANCES>1, PROXY_WORKERS>0) another process
+ * may have just bumped token_version (password change, logout everywhere), so
+ * on a mismatch we re-read the database before deciding. Without this, one
+ * instance accepts the new cookie and another rejects it -> redirect loops.
+ */
+function getForToken(id, v) {
+    const cached = getByIdCached(id);
+    if (cached && cached.token_version === v) return cached;
+    const fresh = getById(id);
+    cache.set(id, fresh);
+    return fresh;
 }
 
 function list() {
@@ -37,7 +52,13 @@ function validateUsername(username) {
 }
 
 function validatePassword(password) {
-    if (String(password || '').length < 8) throw new Error('Password must be at least 8 characters');
+    const p = String(password || '');
+    if (p.length < 8) throw new Error('Password must be at least 8 characters');
+    if (p.length > 200) throw new Error('Password is too long');
+}
+
+function validateEmail(email) {
+    if (email && !/^[^\s@]{1,64}@[^\s@]{1,190}\.[^\s@]{2,}$/.test(String(email))) throw new Error('Enter a valid e-mail address');
 }
 
 const optInt = (v) => (v === '' || v === null || v === undefined ? null : Math.max(0, parseInt(v, 10) || 0));
@@ -45,8 +66,9 @@ const optInt = (v) => (v === '' || v === null || v === undefined ? null : Math.m
 /**
  * @returns {{ user: object, accessToken: string|null }} accessToken is shown ONCE.
  */
-function create({ username, password, role = 'user', generateToken = false, poolId = null, rateLimitRpm = null, bandwidthLimitMbDay = null, note = null }) {
+function create({ username, password, email = null, role = 'user', pending = false, generateToken = false, poolId = null, rateLimitRpm = null, bandwidthLimitMbDay = null, note = null }) {
     validateUsername(username);
+    validateEmail(email);
     if (!password && !generateToken) throw new Error('Provide a password or generate an access token');
     if (password) validatePassword(password);
     if (!['admin', 'user'].includes(role)) throw new Error('Invalid role');
@@ -55,11 +77,13 @@ function create({ username, password, role = 'user', generateToken = false, pool
         const info = db
             .get()
             .prepare(
-                `INSERT INTO users (username, password_hash, access_token_hash, role, pool_id, rate_limit_rpm, bandwidth_limit_mb_day, note, created_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+                `INSERT INTO users (username, email, pending, password_hash, access_token_hash, role, pool_id, rate_limit_rpm, bandwidth_limit_mb_day, note, created_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
             )
             .run(
                 username,
+                email ? String(email).trim().toLowerCase() : null,
+                pending ? 1 : 0,
                 password ? hashPassword(password) : null,
                 accessToken ? sha256(accessToken) : null,
                 role,
@@ -94,6 +118,11 @@ function update(id, patch) {
     if (patch.rateLimitRpm !== undefined) set('rate_limit_rpm', optInt(patch.rateLimitRpm));
     if (patch.bandwidthLimitMbDay !== undefined) set('bandwidth_limit_mb_day', optInt(patch.bandwidthLimitMbDay));
     if (patch.note !== undefined) set('note', patch.note || null);
+    if (patch.email !== undefined) {
+        validateEmail(patch.email);
+        set('email', patch.email ? String(patch.email).trim().toLowerCase() : null);
+    }
+    if (patch.pending !== undefined) set('pending', patch.pending ? 1 : 0);
     if (patch.password) {
         validatePassword(patch.password);
         set('password_hash', hashPassword(patch.password));
@@ -132,22 +161,57 @@ function countAdmins() {
     return db.get().prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'admin' AND enabled = 1").get().n;
 }
 
-/** @returns user or null. Constant-ish time: always runs a hash when the user is unknown. */
+/**
+ * Checks a username + password.
+ * @returns {{ user: object } | { error: 'invalid' | 'pending' | 'disabled' }}
+ * Always runs one scrypt hash, so response time does not reveal whether the user exists.
+ */
 function authenticatePassword(username, password) {
-    const row = db.get().prepare('SELECT id, password_hash, enabled FROM users WHERE username = ?').get(String(username || ''));
+    const row = db.get().prepare('SELECT id, password_hash, enabled, pending FROM users WHERE username = ?').get(String(username || ''));
     if (!row || !row.password_hash) {
         verifyPassword(String(password), 'scrypt$16384$8$1$AAAAAAAAAAAAAAAAAAAAAA==$' + 'A'.repeat(86) + '==');
-        return null;
+        return { error: 'invalid' };
     }
-    if (!verifyPassword(password, row.password_hash) || !row.enabled) return null;
-    return markLogin(row.id);
+    if (!verifyPassword(password, row.password_hash)) return { error: 'invalid' };
+    return finishLogin(row);
 }
 
+/** Checks an access code. Same return shape as authenticatePassword. */
 function authenticateToken(token) {
-    if (!token || String(token).length < 10) return null;
-    const row = db.get().prepare('SELECT id, enabled FROM users WHERE access_token_hash = ?').get(sha256(String(token).trim()));
-    if (!row || !row.enabled) return null;
-    return markLogin(row.id);
+    if (!token || String(token).length < 10) return { error: 'invalid' };
+    const row = db.get().prepare('SELECT id, enabled, pending FROM users WHERE access_token_hash = ?').get(sha256(String(token).trim()));
+    if (!row) return { error: 'invalid' };
+    return finishLogin(row);
+}
+
+function finishLogin(row) {
+    if (row.pending) return { error: 'pending' };
+    if (!row.enabled) return { error: 'disabled' };
+    return { user: markLogin(row.id) };
+}
+
+/** Self-registration from the sign-up page. */
+function register({ username, email, password, needsApproval }) {
+    validatePassword(password);
+    return create({ username, email, password, role: 'user', pending: !!needsApproval }).user;
+}
+
+function approve(id) {
+    db.get().prepare('UPDATE users SET pending = 0, enabled = 1 WHERE id = ?').run(id);
+    cache.delete(id);
+    return getById(id);
+}
+
+function countPending() {
+    return db.get().prepare('SELECT COUNT(*) AS n FROM users WHERE pending = 1').get().n;
+}
+
+/** Users change their own password (needs the current one). */
+function changeOwnPassword(id, currentPassword, newPassword) {
+    const row = db.get().prepare('SELECT password_hash FROM users WHERE id = ?').get(id);
+    if (!row) throw new Error('User not found');
+    if (row.password_hash && !verifyPassword(currentPassword, row.password_hash)) throw new Error('Current password is wrong');
+    return update(id, { password: newPassword });
 }
 
 function markLogin(id) {
@@ -158,6 +222,7 @@ function markLogin(id) {
 module.exports = {
     getById,
     getByIdCached,
+    getForToken,
     list,
     count,
     create,
@@ -168,5 +233,9 @@ module.exports = {
     countAdmins,
     authenticatePassword,
     authenticateToken,
+    register,
+    approve,
+    countPending,
+    changeOwnPassword,
     clearCache: () => cache.clear()
 };

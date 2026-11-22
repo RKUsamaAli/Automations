@@ -9,16 +9,16 @@
 </head>
 <body>
 <header class="topbar">
-    <span class="brand">Admin</span>
-    <span class="muted small" id="release"></span>
+    <a class="logo" href="/admin"><span class="logo-mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg></span><span>Admin</span></a>
+    <span class="badge plain hide-mobile" id="release"></span>
     <span class="spacer"></span>
-    <a href="/" class="btn small">Portal</a>
+    <a href="/" class="btn small">Back to portal</a>
     <button type="button" class="small" id="logout">Sign out</button>
 </header>
 
 <nav class="tabs admin-tabs" id="tabs">
     <button type="button" data-tab="dashboard" class="active">Dashboard</button>
-    <button type="button" data-tab="users">Users</button>
+    <button type="button" data-tab="users">Users <span class="count hidden" id="pending-count"></span></button>
     <button type="button" data-tab="pools">Proxy pools</button>
     <button type="button" data-tab="sites">Sites</button>
     <button type="button" data-tab="scripts">Scripts</button>

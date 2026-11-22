@@ -59,7 +59,9 @@ test('real engine: hand-off, sticky upstream proxy, script injection, access con
     const upstream = http.createServer((req, res) => {
         seen.push({ url: req.url, auth: req.headers['proxy-authorization'] || null, xff: req.headers['x-forwarded-for'] || null });
         const target = new URL(req.url);
-        const out = http.request({ host: target.hostname, port: target.port, path: target.pathname + target.search, method: req.method, headers: { ...req.headers, host: target.host } }, (r) => {
+        // Like a real provider resolving DNS: *.localtest -> the fake site on 127.0.0.1.
+        const host = target.hostname.endsWith('.localtest') ? '127.0.0.1' : target.hostname;
+        const out = http.request({ host, port: target.port, path: target.pathname + target.search, method: req.method, headers: { ...req.headers, host: target.host } }, (r) => {
             res.writeHead(r.statusCode, r.headers);
             r.pipe(res);
         });
@@ -74,7 +76,7 @@ test('real engine: hand-off, sticky upstream proxy, script injection, access con
     pools.importProxies(pool.id, `http://puser:ppass@127.0.0.1:${upPort}`);
     const proxyRow = pools.listProxies(pool.id)[0];
     pools.recordHealth(proxyRow.id, { ok: true, latencyMs: 5, slowMs: 5000, failuresBeforeDead: 3 });
-    scripts.save({ name: 'engine-marker', domains: '127.0.0.1', code: 'window.__engineMarker = 42;' });
+    scripts.save({ name: 'engine-marker', domains: 'shop.localtest', code: 'window.__engineMarker = 42;' });
     settings.update({ upstream_fallback: 'deny' });
 
     // ---- start the engine ----
@@ -118,7 +120,8 @@ test('real engine: hand-off, sticky upstream proxy, script injection, access con
     assert.ok(healthy, `engine did not start:\n${output}`);
 
     // ---- 1. hand-off ----
-    const target = `http://127.0.0.1:${sitePort}/`;
+    // A public-looking hostname: the portal refuses to proxy to private addresses like 127.0.0.1.
+    const target = `http://shop.localtest:${sitePort}/`;
     const ticket = mintTicket({ uid: alice.id, v: alice.token_version, url: target });
     const start = await get(`${base}/__portal/start?t=${encodeURIComponent(ticket)}`);
     assert.equal(start.status, 302, start.text);
@@ -145,6 +148,9 @@ test('real engine: hand-off, sticky upstream proxy, script injection, access con
     assert.match(bundle.text, /__engineMarker = 42/);
 
     // ---- 4. access control ----
+    // proxying to a private address is refused even inside a valid session
+    const priv = await get(`${base}/${sid}/http://127.0.0.1:${sitePort}/`, { cookie, accept: 'text/html', 'sec-fetch-dest': 'document' });
+    assert.equal(priv.status, 403, 'SSRF to 127.0.0.1 blocked');
     const anon = await get(base + location, { accept: 'text/html', 'sec-fetch-dest': 'document' });
     assert.equal(anon.status, 302);
     assert.match(anon.headers.get('location'), /\/login$/);

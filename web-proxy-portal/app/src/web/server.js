@@ -2,8 +2,11 @@
 /**
  * PORTAL process - serves APP_DOMAIN (e.g. https://portal.example.com)
  *
- *   /login          login page (password or access code)
- *   /               landing page: URL bar, site tiles, my sessions
+ *   /login          sign in (password or access code)
+ *   /register       create an account (setting registration_mode)
+ *   /               browse: URL bar, proxy pool picker, site tiles, my sessions
+ *   /proxies        my own upstream proxies
+ *   /account        profile, change password, sign out
  *   /admin          admin panel
  *   /api/...        JSON API used by those pages
  *   /healthz        health probe used by deploy.sh (no auth)
@@ -60,7 +63,11 @@ app.use('/api', (_req, res) => res.status(404).json({ error: 'Not found' }));
 // ---- Pages ----
 const page = (file) => (_req, res) => res.set('Cache-Control', 'no-store').sendFile(path.join(PUBLIC, file));
 app.get('/login', (req, res, next) => (req.user ? res.redirect('/') : page('login.html')(req, res, next)));
+app.get('/register', (req, res, next) => (req.user ? res.redirect('/') : page('register.html')(req, res, next)));
+app.get('/logout', (_req, res) => res.redirect('/account')); // signing out is a POST (CSRF-safe)
 app.get('/', requireUser, page('index.html'));
+app.get('/proxies', requireUser, page('proxies.html'));
+app.get('/account', requireUser, page('account.html'));
 app.get('/admin', requireAdmin, page('admin.html'));
 app.get('/favicon.ico', (_req, res) => res.status(204).end());
 

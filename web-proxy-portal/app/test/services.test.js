@@ -15,16 +15,31 @@ test('users: create, password + token login, disable', () => {
     const { user, accessToken } = users.create({ username: 'alice', password: 'password123', generateToken: true });
     assert.equal(user.role, 'user');
     assert.ok(accessToken);
-    assert.equal(users.authenticatePassword('alice', 'password123').id, user.id);
-    assert.equal(users.authenticatePassword('ALICE', 'password123').id, user.id, 'usernames are case-insensitive');
-    assert.equal(users.authenticatePassword('alice', 'nope'), null);
-    assert.equal(users.authenticateToken(accessToken).id, user.id);
+    assert.equal(users.authenticatePassword('alice', 'password123').user.id, user.id);
+    assert.equal(users.authenticatePassword('ALICE', 'password123').user.id, user.id, 'usernames are case-insensitive');
+    assert.equal(users.authenticatePassword('alice', 'nope').error, 'invalid');
+    assert.equal(users.authenticatePassword('nobody', 'x').error, 'invalid');
+    assert.equal(users.authenticateToken(accessToken).user.id, user.id);
     const before = users.getById(user.id).token_version;
     users.update(user.id, { enabled: false });
-    assert.equal(users.authenticatePassword('alice', 'password123'), null);
+    assert.equal(users.authenticatePassword('alice', 'password123').error, 'disabled');
     assert.equal(users.getById(user.id).token_version, before + 1, 'disabling bumps token_version');
     assert.throws(() => users.create({ username: 'alice', password: 'password123' }), /exists/);
     assert.throws(() => users.create({ username: 'x', password: 'password123' }), /Username/);
+});
+
+test('users: registration with approval, own password change', () => {
+    const u = users.register({ username: 'newbie', email: 'New@Example.com', password: 'password123', needsApproval: true });
+    assert.equal(u.pending, 1);
+    assert.equal(u.email, 'new@example.com');
+    assert.equal(users.authenticatePassword('newbie', 'password123').error, 'pending');
+    assert.equal(users.countPending() >= 1, true);
+    users.approve(u.id);
+    assert.ok(users.authenticatePassword('newbie', 'password123').user);
+    assert.throws(() => users.changeOwnPassword(u.id, 'wrong', 'newpassword1'), /Current password/);
+    users.changeOwnPassword(u.id, 'password123', 'newpassword1');
+    assert.ok(users.authenticatePassword('newbie', 'newpassword1').user);
+    assert.throws(() => users.register({ username: 'bademail', email: 'nope', password: 'password123' }), /e-mail/);
 });
 
 test('pools: import, default pool, least-loaded pick, health', () => {
@@ -54,6 +69,38 @@ test('pools: import, default pool, least-loaded pick, health', () => {
     assert.equal(pools.resolvePoolId({}, 'https://shop.uksite.co.uk/x', sites.listEnabled()), uk.id);
     assert.equal(pools.resolvePoolId({}, 'https://other.com/', sites.listEnabled()), us.id);
     assert.equal(pools.resolvePoolId({ pool_id: uk.id }, 'https://other.com/', sites.listEnabled()), uk.id);
+});
+
+test('pools: sharing with users, personal pools, user proxy safety', async () => {
+    const shared = pools.savePool({ name: 'Shared all', visibility: 'all' });
+    const vip = pools.savePool({ name: 'VIP only', visibility: 'assigned' });
+    const dave = users.create({ username: 'dave', password: 'password123' }).user;
+    const erin = users.create({ username: 'erin', password: 'password123' }).user;
+    pools.setPoolAccess(vip.id, [dave.id]);
+
+    const names = (u) => pools.listAccessiblePools(u).map((p) => p.name);
+    assert.ok(names(dave).includes('VIP only'));
+    assert.ok(!names(erin).includes('VIP only'), 'assigned pool hidden from other users');
+    assert.ok(names(erin).includes('Shared all'));
+    assert.equal(pools.canUsePool(erin, vip.id), false);
+    assert.equal(pools.resolvePoolId(erin, 'https://x.com/', [], vip.id) === vip.id, false, 'cannot pick a pool you are not allowed to use');
+    assert.equal(pools.resolvePoolId(dave, 'https://x.com/', [], vip.id), vip.id);
+
+    // user proxies: private addresses rejected, public accepted, limit enforced
+    const r = await pools.importUserProxies(erin, 'http://u:p@127.0.0.1:3000\nhttp://u:p@10.1.2.3:8080\n8.8.8.8:3128:u:p', 'http', 25);
+    assert.equal(r.added, 1);
+    assert.equal(r.errors.length, 2);
+    const personal = pools.getPersonalPool(erin.id);
+    assert.equal(personal.owner_user_id, erin.id);
+    assert.ok(names(erin).includes(personal.name));
+    assert.ok(!names(dave).includes(personal.name), 'personal pool is private');
+    assert.equal(pools.canUsePool(dave, personal.id), false);
+    const limited = await pools.importUserProxies(erin, '8.8.4.4:3128\n1.1.1.1:3128', 'http', 2);
+    assert.equal(limited.added, 1, 'per-user limit');
+    const own = pools.listProxies(personal.id)[0];
+    assert.ok(pools.getOwnedProxy(erin.id, own.id));
+    assert.equal(pools.getOwnedProxy(dave.id, own.id), null, 'cannot touch someone else\'s proxy');
+    assert.ok(shared);
 });
 
 test('sites: validation and allowlist', () => {
@@ -86,6 +133,9 @@ test('scripts: validation, matching, ordering, bundle isolation', () => {
 
     const other = scripts.buildBundle('https://other.org/', 'other.org');
     assert.ok(!other.includes('"first"'), 'domain-specific script not included elsewhere');
+    const withButton = scripts.buildBundle('https://www.example.com/', 'www.example.com', undefined, { portalUrl: 'https://portal.test/' });
+    assert.ok(withButton.includes('__portal_home') && withButton.includes('"https://portal.test/"'), 'portal button included');
+    assert.ok(!bundle.includes('__portal_home'), 'no button unless requested');
     const unknown = scripts.buildBundle(null, null);
     assert.ok(unknown.includes('"second"') && !unknown.includes('"first"'), 'unknown page -> only * scripts');
 });
@@ -111,4 +161,14 @@ test('usage: track + flush aggregates per user and session', () => {
     const row = sessions.get(sid);
     assert.equal(row.bytes, 1500);
     assert.equal(row.requests, 2);
+});
+
+test('users: a stale per-process cache never rejects a fresh cookie', () => {
+    const u = users.create({ username: 'cachey', password: 'password123' }).user;
+    users.getByIdCached(u.id); // warm the cache with token_version 1
+    // Simulate ANOTHER process bumping the version (direct DB write, our cache untouched).
+    require('../src/db').get().prepare('UPDATE users SET token_version = token_version + 1 WHERE id = ?').run(u.id);
+    assert.equal(users.getByIdCached(u.id).token_version, 1, 'cache is stale');
+    assert.equal(users.getForToken(u.id, 2).token_version, 2, 'new cookie accepted after refresh');
+    assert.notEqual(users.getForToken(u.id, 1).token_version, 1, 'old cookie still rejected');
 });

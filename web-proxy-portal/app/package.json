@@ -12,12 +12,16 @@
     "start:proxy": "node src/proxy/server.js",
     "migrate": "node src/cli/index.js migrate",
     "cli": "node src/cli/index.js",
-    "test": "node --test --test-concurrency=1 \"test/**/*.test.js\""
+    "test": "node --test --test-concurrency=1 \"test/**/*.test.js\"",
+    "e2e": "playwright test"
   },
   "dependencies": {
     "better-sqlite3": "^11.10.0",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "socks": "^2.8.4"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0"
   }
 }

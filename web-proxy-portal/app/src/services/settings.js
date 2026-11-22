@@ -9,6 +9,13 @@ const db = require('../db');
 const TtlCache = require('../lib/ttlCache');
 
 const DEFAULTS = {
+    // --- Registration ---
+    registration_mode: 'approval', // 'open' = instant access, 'approval' = admin approves, 'closed' = no sign-up page
+
+    // --- User-owned proxies ---
+    user_proxies_enabled: true, // users may add their own upstream proxies ("My proxies")
+    max_proxies_per_user: 25,
+
     // --- Access control ---
     allowlist_enabled: false, // only allow domains of configured sites + allowlist_extra
     allowlist_extra: '', // extra patterns, comma/newline separated, e.g. "*.example.com"
@@ -26,7 +33,13 @@ const DEFAULTS = {
 
     // --- Branding ---
     portal_title: 'Web Portal',
-    portal_notice: '' // optional message shown on the landing page
+    portal_notice: '', // optional message shown on the landing page
+    show_portal_button: true // small "Portal" button on proxied pages (way back on iPhone)
+};
+
+const ENUMS = {
+    registration_mode: ['open', 'approval', 'closed'],
+    upstream_fallback: ['deny', 'direct']
 };
 
 const cache = new TtlCache(10000);
@@ -69,8 +82,8 @@ function update(patch) {
                 value = Number(raw);
                 if (!Number.isFinite(value) || value < 0) throw new Error(`Setting ${key} must be a non-negative number`);
             } else value = String(raw ?? '');
-            if (key === 'upstream_fallback' && !['deny', 'direct'].includes(value)) {
-                throw new Error('upstream_fallback must be "deny" or "direct"');
+            if (ENUMS[key] && !ENUMS[key].includes(value)) {
+                throw new Error(`${key} must be one of: ${ENUMS[key].join(', ')}`);
             }
             stmt.run(key, JSON.stringify(value), now);
         }
@@ -80,4 +93,4 @@ function update(patch) {
     return getAll();
 }
 
-module.exports = { DEFAULTS, getAll, get, update, clearCache: () => cache.clear() };
+module.exports = { DEFAULTS, ENUMS, getAll, get, update, clearCache: () => cache.clear() };

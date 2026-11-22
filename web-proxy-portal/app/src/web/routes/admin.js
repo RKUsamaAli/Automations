@@ -3,8 +3,10 @@
  * Admin API (all routes require role=admin, mounted at /api/admin).
  *
  *   GET  /overview
- *   Users     : GET/POST /users, PATCH/DELETE /users/:id, POST/DELETE /users/:id/token, POST /users/:id/logout
+ *   Users     : GET/POST /users, PATCH/DELETE /users/:id, POST/DELETE /users/:id/token, POST /users/:id/logout,
+ *               POST /users/:id/approve
  *   Pools     : GET/POST /pools, PUT/DELETE /pools/:id, GET /pools/:id/proxies,
+ *               GET/PUT /pools/:id/access  (which users may use an "assigned" pool),
  *               POST /pools/:id/import, POST /pools/:id/check, DELETE /pools/:id/dead
  *   Proxies   : PATCH/DELETE /proxies/:id
  *   Sites     : GET/POST /sites, PUT/DELETE /sites/:id
@@ -51,6 +53,7 @@ router.get(
             release: config.releaseName,
             sessions: sessions.stats(),
             users: users.count(),
+            pendingUsers: users.countPending(),
             pools: poolList.length,
             proxies: poolList.reduce((a, p) => a + p.proxy_count, 0),
             usableProxies: poolList.reduce((a, p) => a + p.usable_count, 0),
@@ -75,7 +78,8 @@ router.post(
             poolId: b.poolId,
             rateLimitRpm: b.rateLimitRpm,
             bandwidthLimitMbDay: b.bandwidthLimitMbDay,
-            note: b.note
+            note: b.note,
+            email: b.email || null
         });
         audit(req, 'admin_user_created', result.user.username);
         return result;
@@ -110,6 +114,14 @@ router.delete(
         audit(req, 'admin_user_deleted', target.username);
     })
 );
+router.post(
+    '/users/:id/approve',
+    h((req) => {
+        const u = users.approve(id(req));
+        audit(req, 'admin_user_approved', u.username);
+        return u;
+    })
+);
 router.post('/users/:id/token', h((req) => ({ accessToken: users.regenerateToken(id(req)) })));
 router.delete('/users/:id/token', h((req) => users.revokeToken(id(req))));
 router.post(
@@ -121,7 +133,14 @@ router.post(
 );
 
 // --------------------------------------------------------------- pools ----
-const poolInput = (b) => ({ name: b.name, country: b.country, type: b.type, isDefault: !!b.isDefault, description: b.description });
+const poolInput = (b) => ({
+    name: b.name,
+    country: b.country,
+    type: b.type,
+    isDefault: !!b.isDefault,
+    description: b.description,
+    visibility: b.visibility === 'assigned' ? 'assigned' : 'all'
+});
 router.get('/pools', h(() => ({ pools: pools.listPools(), types: pools.POOL_TYPES })));
 router.post('/pools', h((req) => pools.savePool(poolInput(req.body || {}))));
 router.put('/pools/:id', h((req) => pools.savePool({ id: id(req), ...poolInput(req.body || {}) })));
@@ -133,6 +152,15 @@ router.delete(
     })
 );
 router.get('/pools/:id/proxies', h((req) => pools.listProxies(id(req))));
+router.get('/pools/:id/access', h((req) => ({ userIds: pools.getPoolAccess(id(req)) })));
+router.put(
+    '/pools/:id/access',
+    h((req) => {
+        const userIds = pools.setPoolAccess(id(req), (req.body || {}).userIds);
+        audit(req, 'admin_pool_access', `pool ${id(req)}: ${userIds.length} user(s)`);
+        return { userIds };
+    })
+);
 router.post(
     '/pools/:id/import',
     h((req) => {

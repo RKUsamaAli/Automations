@@ -5,44 +5,48 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="robots" content="noindex">
     <meta name="apple-mobile-web-app-capable" content="yes">
-    <title>Portal</title>
+    <title>Browse</title>
     <link rel="stylesheet" href="/assets/css/app.css">
 </head>
 <body>
-<header class="topbar">
-    <span class="brand" id="brand">Portal</span>
-    <span class="spacer"></span>
-    <a href="/admin" id="admin-link" class="btn small hidden">Admin</a>
-    <button type="button" class="small" id="logout">Sign out</button>
-</header>
+<!-- Top bar + bottom tab bar are added by Portal.shell() -->
+<main class="container narrow">
+    <div id="notice" class="alert info hidden" role="status"></div>
 
-<main class="container">
-    <div id="notice" class="alert info hidden"></div>
-
-    <!-- URL bar -->
-    <section class="card">
-        <h2>Open a website</h2>
+    <!-- Address bar -->
+    <section class="card hero" aria-labelledby="hero-title">
+        <h1 id="hero-title">Where to today?</h1>
+        <p>Open any website through a secure proxy. Your session keeps logins until you end it.</p>
         <form id="go-form" class="go-form" novalidate>
-            <input id="url" type="url" inputmode="url" placeholder="example.com" autocapitalize="none" autocorrect="off" spellcheck="false" aria-label="Website address">
-            <button type="submit" class="primary" id="go">Go</button>
+            <div class="url-input">
+                <svg class="url-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
+                <label for="url" class="sr-only">Website address</label>
+                <input id="url" type="url" inputmode="url" enterkeyhint="go" placeholder="Enter a website, e.g. example.com" autocapitalize="none" autocorrect="off" spellcheck="false">
+            </div>
+            <button type="submit" id="go">Go</button>
         </form>
+        <div class="via" id="via">
+            <label for="pool" class="sr-only">Connect through</label>
+            <span>Connect through</span>
+            <select id="pool"></select>
+            <span id="pool-health"></span>
+        </div>
         <div id="go-error" class="alert error hidden" role="alert"></div>
     </section>
 
     <!-- Admin-configured sites -->
-    <section class="card hidden" id="sites-card">
-        <h2>Sites</h2>
+    <section class="card hidden" id="sites-card" aria-labelledby="sites-title">
+        <div class="card-title"><h2 id="sites-title">Quick access</h2></div>
         <div class="tiles" id="sites"></div>
     </section>
 
     <!-- Active sessions -->
-    <section class="card">
-        <div class="card-title"><h2>Your sessions</h2><span class="spacer"></span><button type="button" class="small" id="refresh">Refresh</button></div>
-        <p class="muted small">A session keeps the site's cookies and logins. Resume it to continue where you left off.</p>
+    <section class="card" aria-labelledby="sessions-title">
+        <div class="card-title"><h2 id="sessions-title">Your sessions</h2><span class="spacer"></span><button type="button" class="small" id="refresh">Refresh</button></div>
+        <p class="card-sub">A session remembers the site's cookies and logins. Resume to continue where you left off.</p>
         <ul class="list" id="sessions"></ul>
     </section>
 </main>
-
 <script src="/assets/js/common.js"></script>
 <script src="/assets/js/portal.js"></script>
 </body>

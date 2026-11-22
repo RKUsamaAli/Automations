@@ -8,7 +8,8 @@
  *  3. Authorize       - the session in the URL belongs to that user and is active
  *  4. IP lock         - optional (setting restrict_session_to_ip)
  *  5. Upstream proxy  - point the session at its sticky upstream proxy
- *  6. Allowlist       - page navigations (or all requests in strict mode)
+ *  6. Address checks  - private/internal addresses blocked; allowlist for
+ *                       page navigations (or all requests in strict mode)
  *  7. Rate limit      - requests/minute and daily bandwidth per user
  *  8. Usage tracking  - counts response bytes for logs
  *
@@ -27,9 +28,10 @@ const upstream = require('./upstream');
 const { parseProxied } = require('./proxyUrl');
 const { COOKIE_PROXY, parseCookies, readProxy } = require('../lib/authTokens');
 const { renderMessage } = require('./pages');
+const { isPrivateHost } = require('../lib/netGuard');
 
 // Paths anyone may open without the proxy cookie.
-const PUBLIC_PATHS = new Set(['/__portal/start', '/__portal/healthz', '/', '/favicon.ico', '/robots.txt']);
+const PUBLIC_PATHS = new Set(['/__portal/start', '/__portal/logout', '/__portal/healthz', '/', '/favicon.ico', '/robots.txt']);
 
 // Headers nginx / CDNs add. Removing them stops target sites seeing the user's real IP.
 const STRIP_HEADERS = ['x-forwarded-for', 'x-real-ip', 'x-forwarded-proto', 'x-forwarded-host', 'x-forwarded-port', 'forwarded', 'via', 'cf-connecting-ip', 'cf-ipcountry', 'cf-ray', 'cf-visitor', 'true-client-ip', 'cdn-loop'];
@@ -135,8 +137,8 @@ function createGuard({ rh, sessionStore }) {
         const ip = req.portalClientIp;
 
         const auth = readProxy(cookies[COOKIE_PROXY]);
-        const user = auth ? users.getByIdCached(auth.uid) : null;
-        if (!user || !user.enabled || user.token_version !== auth.v) {
+        const user = auth ? users.getForToken(auth.uid, auth.v) : null;
+        if (!user || !user.enabled || user.pending || user.token_version !== auth.v) {
             if (navigation) {
                 // Send them back through the portal login.
                 res.writeHead(302, { Location: `${config.appBaseUrl}/login`, 'Cache-Control': 'no-store' });
@@ -185,7 +187,12 @@ function createGuard({ rh, sessionStore }) {
         const up = await upstream.applyToSession(session, row);
         if (!up.ok) return deny(req, res, isWebsocket, 503, up.error, { navigation });
 
-        // ---- 6. domain allowlist ---------------------------------------------
+        // ---- 6a. never proxy to private/internal addresses (SSRF) -------------
+        if (parsed && isPrivateHost(parsed.host)) {
+            return deny(req, res, isWebsocket, 403, 'This address is not allowed.', { navigation });
+        }
+
+        // ---- 6b. domain allowlist --------------------------------------------
         if (s.allowlist_enabled && parsed && (navigation || s.allowlist_strict) && !sites.isHostAllowed(parsed.host)) {
             const key = `${user.id}|${parsed.host}`;
             if (!blockedLogged.get(key)) {

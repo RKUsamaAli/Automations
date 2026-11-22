@@ -6,6 +6,14 @@ URL (or tap a site tile) and browse the target site **through a sticky upstream
 proxy** (for example Webshare). Admins can inject custom JavaScript into proxied
 pages.
 
+**Features:** sign-up with admin approval, sign-in by password or access code,
+admin proxy pools shared with everyone or with chosen users, users' own proxies
+("My proxies"), sticky upstream per session with health checks and failover,
+site tiles, injected scripts, per-user limits, usage logs, admin panel. Designed
+mobile-first for iPhone Safari.
+
+![Screens](docs/screenshots/overview.png)
+
 Built on **[Rammerhead](https://github.com/binary-person/rammerhead)**, a server-side
 proxy that keeps cookies and sessions on the server. Ships with production
 **server setup**, **deploy** (with automatic rollback) and **rollback** scripts for
@@ -34,7 +42,9 @@ web-proxy-portal/
 ├── docs/
 │   ├── ARCHITECTURE.md      how it works, security model, request flow
 │   ├── DEPLOYMENT.md        server setup, deploy, rollback, CI, troubleshooting
-│   └── ADMIN-GUIDE.md       users, proxy pools, sites, scripts, settings
+│   ├── ADMIN-GUIDE.md       users, approvals, proxy pools, sites, scripts, settings
+│   ├── TESTING.md           unit, real-engine and Playwright browser tests
+│   └── screenshots/         every screen, captured by the browser tests
 ├── app/                     the Node.js application
 │   ├── src/
 │   │   ├── config/          env loading (.env) + validation
@@ -47,6 +57,7 @@ web-proxy-portal/
 │   │   └── cli/             command line tool (create-admin, import-proxies, backup-db ...)
 │   ├── injected-scripts/    example scripts for page injection + how-to
 │   ├── test/                unit, HTTP and real-engine end-to-end tests (node:test)
+│   ├── e2e/                 Playwright browser journey + fake shop/upstream proxies
 │   ├── ecosystem.config.js  PM2 process definition
 │   ├── rammerhead.lock      pinned Rammerhead commit
 │   └── .env.example         every app setting, documented
@@ -111,5 +122,6 @@ npm run start:web           # http://localhost:3000
 git clone https://github.com/binary-person/rammerhead.git vendor/rammerhead
 (cd vendor/rammerhead && git checkout "$(grep COMMIT= ../../rammerhead.lock | cut -d= -f2)" && npm install && npm run build)
 npm run start:proxy         # 127.0.0.1:8080 / 8081
-npm test                    # 30 tests; the engine e2e test runs when vendor/rammerhead is built
+npm test                    # 35 tests; the engine test runs when vendor/rammerhead is built
+npm run e2e                 # Playwright browser journey (see docs/TESTING.md)
 ```

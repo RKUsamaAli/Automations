@@ -50,9 +50,44 @@ jobs:
         working-directory: web-proxy-portal/deploy
         run: shellcheck -x -S warning *.sh lib/*.sh tools/*.sh
 
+  e2e:
+    # Browser journey (Playwright) against the real engine: sign-up, approval,
+    # pools, own proxies, browsing through upstream proxies, sign-out ...
+    if: github.event_name != 'workflow_dispatch' || inputs.action == 'deploy'
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: web-proxy-portal/app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web-proxy-portal/app/package-lock.json
+      - run: npm ci
+      - name: Build the pinned Rammerhead engine
+        run: |
+          set -a; . ./rammerhead.lock; set +a
+          git clone --quiet "$RAMMERHEAD_REPO" vendor/rammerhead
+          git -C vendor/rammerhead -c advice.detachedHead=false checkout --quiet "$RAMMERHEAD_COMMIT"
+          (cd vendor/rammerhead && npm install --no-audit --no-fund && npm run build)
+      - run: npx playwright install --with-deps chromium
+      - run: npm test
+      - run: npm run e2e
+      - name: Upload screenshots and report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-screenshots
+          path: |
+            web-proxy-portal/app/e2e/screenshots
+            web-proxy-portal/app/e2e/report
+          retention-days: 14
+
   deploy:
-    needs: test
-    if: always() && (needs.test.result == 'success' || needs.test.result == 'skipped') && github.event_name != 'pull_request'
+    needs: [test, e2e]
+    if: always() && (needs.test.result == 'success' || needs.test.result == 'skipped') && (needs.e2e.result == 'success' || needs.e2e.result == 'skipped') && github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     environment: production
     env:

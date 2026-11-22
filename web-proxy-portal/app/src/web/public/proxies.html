@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="robots" content="noindex">
+    <title>My proxies</title>
+    <link rel="stylesheet" href="/assets/css/app.css">
+</head>
+<body>
+<main class="container narrow">
+    <div class="page-head">
+        <h1>My proxies</h1>
+        <p>Add your own upstream proxies (for example from Webshare). Only you can browse through them — pick <strong>My proxies</strong> under "Connect through" on the Browse page.</p>
+    </div>
+
+    <div id="disabled" class="alert warn hidden">Adding your own proxies is turned off by the administrator.</div>
+
+    <!-- Add proxies -->
+    <section class="card" id="add-card" aria-labelledby="add-title">
+        <div class="card-title"><h2 id="add-title">Add proxies</h2><span class="spacer"></span><span class="muted small" id="usage"></span></div>
+        <div class="meter" aria-hidden="true"><span id="usage-bar"></span></div>
+        <form id="add-form" class="stack" novalidate>
+            <div id="add-result" class="hidden" role="status"></div>
+            <div class="field">
+                <label for="text">Proxy list <span class="muted">(one per line)</span></label>
+                <textarea id="text" class="code" spellcheck="false" autocapitalize="none" placeholder="http://user:pass@1.2.3.4:8080&#10;socks5://user:pass@5.6.7.8:1080&#10;1.2.3.4:8080:user:pass" aria-describedby="formats"></textarea>
+                <div class="hint" id="formats">Formats: <code>http://user:pass@ip:port</code>, <code>socks5://user:pass@ip:port</code>, <code>ip:port:user:pass</code> (Webshare), <code>ip:port</code>.</div>
+            </div>
+            <div class="row between">
+                <div class="row">
+                    <label for="protocol" class="small muted">Lines without a scheme are</label>
+                    <select id="protocol" class="small-select"><option value="http">HTTP</option><option value="socks5">SOCKS5</option></select>
+                </div>
+                <button type="submit" class="primary" id="add">Add proxies</button>
+            </div>
+        </form>
+    </section>
+
+    <!-- List -->
+    <section class="card" aria-labelledby="list-title">
+        <div class="card-title"><h2 id="list-title">Your proxies</h2><span class="spacer"></span><button type="button" class="small" id="check">Check now</button></div>
+        <ul class="list" id="list"></ul>
+    </section>
+</main>
+<script src="/assets/js/common.js"></script>
+<script src="/assets/js/proxies.js"></script>
+</body>
+</html>

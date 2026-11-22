@@ -5,6 +5,7 @@
  *   GET /__portal/start?t=<ticket>  hand-off from the portal: validates the
  *                                   ticket, creates/resumes the session, sets
  *                                   the pp_proxy cookie, redirects into the site
+ *   GET /__portal/logout            clears the proxy cookie, then back to the portal sign-in
  *   GET /__portal/inject.js         custom scripts bundle for the current page
  *   GET /__portal/healthz           health probe for deploy.sh
  *   GET /                           redirect to the portal
@@ -61,7 +62,7 @@ function setupRoutes({ proxyServer, sessionStore, rh }) {
         if (!consumeNonce(ticket.n)) return sendHtml(res, 400, backToPortal('Link already used', 'This link was already used. Please start again from the portal.'));
 
         const user = users.getById(ticket.uid);
-        if (!user || !user.enabled || user.token_version !== ticket.v) {
+        if (!user || !user.enabled || user.pending || user.token_version !== ticket.v) {
             return sendHtml(res, 403, backToPortal('Not allowed', 'Your account is not active. Please log in again.'));
         }
         const ip = clientIp(req);
@@ -83,7 +84,7 @@ function setupRoutes({ proxyServer, sessionStore, rh }) {
         } else {
             // ---- create a new session ----
             target = ticket.url;
-            const choice = upstream.chooseForNewSession(user, target, sites.listEnabled());
+            const choice = upstream.chooseForNewSession(user, target, sites.listEnabled(), ticket.pool);
             if (choice.error) {
                 events.record('session_refused', { userId: user.id, detail: choice.error, ip });
                 return sendHtml(res, 503, backToPortal('No proxy available', choice.error));
@@ -120,6 +121,18 @@ function setupRoutes({ proxyServer, sessionStore, rh }) {
         res.end();
     });
 
+    // ----------------------------------------------------------- logout ----
+    // The portal's sign-out sends the browser here so the proxy cookie (which
+    // lives on this hostname) is removed too. Always returns to the portal.
+    proxyServer.GET('/__portal/logout', (_req, res) => {
+        res.writeHead(302, {
+            'Set-Cookie': serializeCookie(COOKIE_PROXY, '', { maxAgeSec: 0 }),
+            Location: `${config.appBaseUrl}/login?signedout=1`,
+            'Cache-Control': 'no-store'
+        });
+        res.end();
+    });
+
     // ----------------------------------------------------------- inject ----
     proxyServer.GET(INJECT_PATH, (req, res) => {
         // The script tag is requested BY the proxied page, so the Referer is
@@ -127,7 +140,9 @@ function setupRoutes({ proxyServer, sessionStore, rh }) {
         const page = parseProxied(req.headers.referer, (id) => sessionStore.get(id, false), rh);
         let body;
         try {
-            body = scripts.buildBundle(page ? page.destUrl : null, page ? page.host : null);
+            body = scripts.buildBundle(page ? page.destUrl : null, page ? page.host : null, undefined, {
+                portalUrl: settings.get('show_portal_button') ? config.appBaseUrl + '/' : null
+            });
         } catch (e) {
             log.error('failed to build script bundle', e);
             body = '/* portal: script bundle error */';

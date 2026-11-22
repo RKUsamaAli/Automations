@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="robots" content="noindex">
+    <title>Account</title>
+    <link rel="stylesheet" href="/assets/css/app.css">
+</head>
+<body>
+<main class="container narrow">
+    <div class="page-head"><h1>Account</h1><p>Your profile, password and sign-out options.</p></div>
+
+    <section class="card" aria-labelledby="profile-title">
+        <div class="row">
+            <span class="avatar" id="avatar"></span>
+            <div class="grow">
+                <h2 id="profile-title" class="profile-name"></h2>
+                <div class="muted small" id="profile-meta"></div>
+            </div>
+        </div>
+    </section>
+
+    <section class="card" aria-labelledby="pw-title">
+        <h2 id="pw-title">Change password</h2>
+        <p class="card-sub">Changing your password signs you out on your other devices.</p>
+        <form id="pw-form" novalidate>
+            <div id="pw-msg" class="hidden" role="status"></div>
+            <div class="field">
+                <label for="current">Current password</label>
+                <div class="input-wrap"><input id="current" type="password" autocomplete="current-password"><button type="button" class="reveal" aria-pressed="false">Show</button></div>
+            </div>
+            <div class="field">
+                <label for="new">New password</label>
+                <div class="input-wrap"><input id="new" type="password" autocomplete="new-password" minlength="8"><button type="button" class="reveal" aria-pressed="false">Show</button></div>
+                <div class="hint">At least 8 characters.</div>
+            </div>
+            <div class="row end"><button type="submit" class="primary" id="pw-save">Update password</button></div>
+        </form>
+    </section>
+
+    <section class="card" aria-labelledby="out-title">
+        <h2 id="out-title">Sign out</h2>
+        <p class="card-sub">Signing out everywhere also ends all your browsing sessions.</p>
+        <div class="row">
+            <button type="button" id="logout">Sign out</button>
+            <button type="button" class="danger" id="logout-all">Sign out everywhere</button>
+        </div>
+    </section>
+</main>
+<script src="/assets/js/common.js"></script>
+<script src="/assets/js/account.js"></script>
+</body>
+</html>

@@ -9,7 +9,9 @@
 const db = require('../db');
 const TtlCache = require('../lib/ttlCache');
 
-const cache = new TtlCache(10000);
+// Short TTL: the portal (another process) ends sessions by writing the DB,
+// and the proxy must notice quickly. A primary-key lookup is microseconds.
+const cache = new TtlCache(2000);
 
 function create({ id, userId, poolId, proxyId, startUrl, clientIp, userAgent }) {
     const now = Date.now();
