@@ -47,7 +47,10 @@ server {
         root /var/www/letsencrypt;
     }
     location / {
-        return 301 https://$host$request_uri;
+        # 308 (not 301): keeps the method and body, so a form/API POST that
+        # arrives over http (old tab, typed http://) still works after the
+        # redirect instead of turning into a GET and failing.
+        return 308 https://$host$request_uri;
     }
 }
 
