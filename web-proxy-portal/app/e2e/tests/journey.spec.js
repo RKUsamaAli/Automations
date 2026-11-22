@@ -63,7 +63,7 @@ test.describe.serial('full product journey', () => {
         await expect(admin.getByText(/Added\s+1/)).toBeVisible();
         await admin.locator('#modal-done').click();
         await admin.locator('#check').click();
-        await expect(admin.locator('#pool-detail').getByText('Online')).toBeVisible({ timeout: 20000 });
+        await expect(admin.locator('#proxy-list tbody').getByText('Online', { exact: true })).toBeVisible({ timeout: 20000 });
     });
 
     test('admin creates a pool only assigned users may use', async () => {
@@ -81,7 +81,7 @@ test.describe.serial('full product journey', () => {
         await admin.locator('#modal-submit').click();
         await admin.locator('#modal-done').click();
         await admin.locator('#check').click();
-        await expect(admin.locator('#pool-detail').getByText('Online')).toBeVisible({ timeout: 20000 });
+        await expect(admin.locator('#proxy-list tbody').getByText('Online', { exact: true })).toBeVisible({ timeout: 20000 });
         await shot(admin, '03-admin-proxy-pools');
     });
 
@@ -281,8 +281,10 @@ test.describe.serial('full product journey', () => {
 
     test('long lists load in batches while scrolling; the summary counts the whole set', async () => {
         // 130 portal API calls -> 130+ rows of type "Portal API" in the request log
-        const api = admin.context().request;
-        for (let i = 0; i < 130; i++) await api.get(S.appUrl + '/api/admin/overview');
+        // (sent from the page, so they use the browser's host mapping and the admin's cookies)
+        await admin.evaluate(async () => {
+            for (let i = 0; i < 130; i++) await fetch('/api/admin/overview', { credentials: 'same-origin' });
+        });
         await admin.getByRole('button', { name: 'Requests' }).click();
         await admin.locator('#rkind').selectOption('api');
         const rows = admin.locator('#req-list tbody tr');
@@ -313,6 +315,7 @@ test.describe.serial('full product journey', () => {
             await expect(admin.locator('#req-list .lazy-status')).toHaveText(/^All .* shown$/, { timeout: 500 });
         }).toPass({ timeout: 20000 });
         await expect(rows).toHaveCount(total); // every row exactly once, nothing skipped
+        await admin.locator('#req-list .lazy-foot').scrollIntoViewIfNeeded();
         await shot(admin, '18e-admin-requests-scrolled', { fullPage: false });
     });
 
