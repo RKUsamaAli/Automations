@@ -430,7 +430,8 @@ test.describe.serial('full product journey', () => {
     });
 
     test('dark mode: System / Light / Dark switch', async () => {
-        await phone.goto(S.appUrl + '/');
+        await login(phone, user.name, user.pass); // the previous step signed out
+        await expect(phone).toHaveURL(S.appUrl + '/');
         // phone: one button showing the current mode; each tap cycles System -> Light -> Dark
         await expect(phone.getByRole('button', { name: 'Light theme' })).toBeHidden();
         await phone.getByRole('button', { name: 'System theme' }).click();
@@ -452,8 +453,7 @@ test.describe.serial('full product journey', () => {
     });
 
     test('expired sign-in: password prompt over the page, then it simply continues', async () => {
-        await login(phone, user.name, user.pass); // the previous step signed out
-        await expect(phone).toHaveURL(S.appUrl + '/');
+        await phone.goto(S.appUrl + '/');
         await expect(phone.locator('#sessions')).toBeVisible();
         // The 5-minute access token runs out: the page renews it silently.
         await phone.context().clearCookies({ name: 'pp_at' });
