@@ -22,7 +22,7 @@ const crypto = require('crypto');
 const config = require('../config');
 const { deriveKey } = require('../lib/crypto');
 const system = require('../lib/system');
-const { extractGoogle, classifyGoogle, extractDuckDuckGo } = require('./extract');
+const { extractGoogle, classifyGoogle, extractDuckDuckGo, extractBing } = require('./extract');
 const log = require('../lib/logger')('search-worker');
 
 const PORT = Number(process.env.SEARCH_PORT) || 3003;
@@ -30,6 +30,8 @@ const CONCURRENCY = Math.max(1, Number(process.env.SEARCH_CONCURRENCY) || 2);
 const TIMEOUT_MS = Number(process.env.SEARCH_TIMEOUT_MS) || 20000;
 const GOOGLE_URL = () => process.env.GOOGLE_SEARCH_URL || 'https://www.google.com/search?q={q}&num=10&hl={hl}';
 const DDG_URL = () => process.env.DDG_SEARCH_URL || 'https://html.duckduckgo.com/html/?q={q}';
+const BING_URL = () => process.env.BING_SEARCH_URL || 'https://www.bing.com/search?q={q}&setlang={hl}';
+const short = (m) => String(m || '').split('\n')[0].replace(/^page\.goto: /, '').slice(0, 140);
 
 function workerKey() {
     return crypto.createHmac('sha256', deriveKey(config.appSecret, 'search-worker')).update('v1').digest('base64url');
@@ -59,7 +61,8 @@ function browser() {
             })
             .catch((e) => {
                 browserPromise = null;
-                throw e;
+                log.error('browser failed to start', { error: e.message });
+                throw Object.assign(new Error(`The search browser could not start on the server (${short(e.message)}). Run: sudo portal-deploy`), { code: 'browser_failed' });
             });
     }
     return browserPromise;
@@ -96,7 +99,10 @@ async function run({ q, proxy, lang }) {
     const started = Date.now();
     const hl = /^[a-z]{2}(-[A-Z]{2})?$/.test(lang || '') ? lang : 'en';
     const b = await browser();
+    // Sites block "HeadlessChrome": present as the normal Chrome of the same version.
+    const userAgent = `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${b.version().split('.')[0]}.0.0.0 Safari/537.36`;
     const ctx = await b.newContext({
+        userAgent,
         proxy: proxyOption(proxy),
         locale: hl,
         viewport: { width: 1280, height: 900 },
@@ -126,18 +132,34 @@ async function run({ q, proxy, lang }) {
         }
         if (results.length) return { engine: 'google', results, ms: Date.now() - started };
 
-        // Fallback: DuckDuckGo through the same proxy.
+        // Fallbacks through the same proxy: DuckDuckGo, then Bing.
         const why =
             kind === 'captcha'
-                ? 'Google asked for a CAPTCHA through this proxy'
+                ? 'Google asked for a CAPTCHA through this connection'
                 : kind === 'consent'
                   ? 'Google showed a consent page'
                   : googleError
-                    ? `Google did not answer (${googleError.split('\n')[0].slice(0, 120)})`
+                    ? `Google did not answer (${short(googleError)})`
                     : 'Google returned no results';
-        await page.goto(fill(DDG_URL(), q, hl), { waitUntil: 'domcontentloaded' });
-        results = await page.evaluate(extractDuckDuckGo);
-        return { engine: 'duckduckgo', results, blocked: kind === 'captcha' ? 'captcha' : kind, note: `${why}, so these results come from DuckDuckGo.`, ms: Date.now() - started };
+        const tried = [why];
+        for (const [engine, url, extract] of [['duckduckgo', DDG_URL, extractDuckDuckGo], ['bing', BING_URL, extractBing]]) {
+            try {
+                // a fresh tab: after a failed load the old one can still be busy with its error page
+                const tab = await ctx.newPage();
+                tab.setDefaultTimeout(TIMEOUT_MS);
+                await tab.goto(fill(url(), q, hl), { waitUntil: 'domcontentloaded' });
+                results = await tab.evaluate(extract);
+                if (results.length) {
+                    const name = engine === 'bing' ? 'Bing' : 'DuckDuckGo';
+                    return { engine, results, blocked: kind === 'captcha' ? 'captcha' : kind, note: `${tried.join('; ')}, so these results come from ${name}.`, ms: Date.now() - started };
+                }
+                tried.push(`${engine === 'bing' ? 'Bing' : 'DuckDuckGo'} returned no results`);
+            } catch (e) {
+                tried.push(`${engine === 'bing' ? 'Bing' : 'DuckDuckGo'} did not answer (${short(e.message)})`);
+            }
+        }
+        log.warn('all search engines failed', { reasons: tried, proxy: proxy ? `${proxy.host}:${proxy.port}` : 'direct' });
+        throw Object.assign(new Error(tried.join('; ')), { code: 'engines_failed' });
     } finally {
         await ctx.close().catch(() => {});
     }
@@ -180,8 +202,15 @@ function start() {
         try {
             send(200, await run({ q: body.q.trim().slice(0, 300), proxy: body.proxy || null, lang: body.lang }));
         } catch (e) {
-            if (!e.expected) log.error('search failed', { error: e.message });
-            send(e.expected ? 400 : 502, { error: e.expected ? e.message : 'The search could not be completed. Try again or use another proxy.', detail: e.message.split('\n')[0].slice(0, 200) });
+            if (!e.expected && !e.code) log.error('search failed', { error: e.message });
+            const error = e.expected
+                ? e.message
+                : e.code === 'engines_failed'
+                  ? 'No search engine answered through this connection. Try again or use another proxy.'
+                  : e.code === 'browser_failed'
+                    ? 'The search service is not working on the server right now.'
+                    : 'The search could not be completed. Try again or use another proxy.';
+            send(e.expected ? 400 : e.code === 'browser_failed' ? 503 : 502, { error, detail: short(e.message).length < 140 ? e.message.split('\n')[0].slice(0, 400) : short(e.message) });
         } finally {
             release();
         }

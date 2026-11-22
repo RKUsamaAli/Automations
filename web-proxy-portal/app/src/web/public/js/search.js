@@ -51,7 +51,7 @@
         } catch (err) {
             box.innerHTML = '';
             P.$('#meta').textContent = '';
-            P.showError(P.$('#error'), err.message);
+            P.showError(P.$('#error'), err.message + (err.detail ? ' Reason (shown to admins): ' + err.detail : ''));
         }
     }
 

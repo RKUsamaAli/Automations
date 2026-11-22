@@ -83,7 +83,9 @@ router.get('/search', async (req, res) => {
         events.record('search', { userId: req.user.id, detail: `${r.engine}${r.cached ? ' (cached)' : ''} via ${via.label}: ${q.slice(0, 200)}` });
         res.json({ ...r, via: via.label });
     } catch (e) {
-        res.status(e.status || 502).json({ error: e.message });
+        events.record('search_failed', { userId: req.user.id, detail: `${q.slice(0, 120)}: ${e.detail || e.message}`.slice(0, 500) });
+        // Admins see why (blocked engine, browser missing ...); users get the friendly message.
+        res.status(e.status || 502).json({ error: e.message, detail: req.user.role === 'admin' ? e.detail || null : undefined });
     }
 });
 

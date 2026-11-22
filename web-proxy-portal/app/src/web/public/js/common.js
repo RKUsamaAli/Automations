@@ -274,6 +274,7 @@
         if (!res.ok) {
             var err = new Error((data && data.error) || ('Request failed (' + res.status + ')'));
             err.reason = data && data.reason;
+            err.detail = data && data.detail;
             err.status = res.status;
             err.reported = true;
             if (data && data.ref) {

@@ -154,7 +154,12 @@ async function main() {
             }
             console.log(`Searching "${words}" via ${proxy ? `${proxy.host}:${proxy.port}` : 'no proxy (direct)'} ...`);
             const started = Date.now();
-            const r = await require('../services/webSearch').search({ q: words, proxy });
+            let r;
+            try {
+                r = await require('../services/webSearch').search({ q: words, proxy });
+            } catch (e) {
+                throw new Error(`${e.message}${e.detail ? `\n  Reason: ${e.detail}` : ''}\n  Worker log: /opt/proxy-portal/shared/logs/search.err.log`);
+            }
             console.log(`Engine: ${r.engine} - ${r.results.length} results in ${Date.now() - started} ms`);
             if (r.note) console.log(`Note: ${r.note}`);
             for (const x of r.results.slice(0, 5)) console.log(`  - ${x.title}\n    ${x.url}`);

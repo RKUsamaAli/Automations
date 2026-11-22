@@ -178,7 +178,9 @@ function setupToolbarRoutes(proxyServer) {
             html(200, resultsPage({ q, sid: row.id, r, toolbar }));
         } catch (e) {
             log.warn('top bar search failed', { error: e.message });
-            html(e.status === 503 ? 503 : 502, resultsPage({ q, sid: row.id, r: null, error: e.message, toolbar }));
+            events.record('search_failed', { userId: user.id, detail: `${q.slice(0, 120)}: ${e.detail || e.message}`.slice(0, 500) });
+            const why = user.role === 'admin' && e.detail ? ` Reason (shown to admins): ${e.detail}` : '';
+            html(e.status === 503 ? 503 : 502, resultsPage({ q, sid: row.id, r: null, error: e.message + why, toolbar }));
         }
     });
 
