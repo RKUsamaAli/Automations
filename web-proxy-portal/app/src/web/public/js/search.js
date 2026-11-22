@@ -63,5 +63,5 @@
         location.href = '/search?q=' + encodeURIComponent(v) + '&via=' + encodeURIComponent(via);
     });
 
-    P.shell('browse').then(function (me) { if (me.user) run(); });
+    P.shell('search').then(function (me) { if (me.user) run(); });
 })();

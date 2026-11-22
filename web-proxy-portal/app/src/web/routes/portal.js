@@ -20,6 +20,7 @@ const config = require('../../config');
 const sites = require('../../services/sites');
 const sessionProxy = require('../../services/sessionProxy');
 const webSearch = require('../../services/webSearch');
+const searchHistory = require('../../services/searchHistory');
 const search = require('../../services/search');
 const RateLimiter = require('../../lib/rateLimiter');
 const { idOrNull } = require('../../lib/ids');
@@ -79,6 +80,7 @@ router.get('/search', async (req, res) => {
     try {
         const via = webSearch.proxyFor(req.user, String(req.query.via || 'direct'));
         const lang = String(req.get('accept-language') || 'en').split(',')[0].slice(0, 5);
+        searchHistory.record(req.user.id, q);
         const r = await webSearch.search({ q, proxy: via.proxy, lang });
         events.record('search', { userId: req.user.id, detail: `${r.engine}${r.cached ? ' (cached)' : ''} via ${via.label}: ${q.slice(0, 200)}` });
         res.json({ ...r, via: via.label });
@@ -100,6 +102,15 @@ router.get('/search-suggest', async (req, res) => {
 });
 
 // Address-bar suggestions: the user's recently opened pages.
+// Recent searches (Browse page)
+router.get('/searches', (req, res) => res.json(searchHistory.list(req.user.id, { q: req.query.q, limit: req.query.limit })));
+router.delete('/searches/:id', (req, res) => res.json({ removed: searchHistory.remove(req.user.id, req.params.id) }));
+router.delete('/searches', (req, res) => {
+    const n = searchHistory.clear(req.user.id);
+    events.record('search_history_cleared', { userId: req.user.id, detail: `${n} searches` });
+    res.json({ removed: n });
+});
+
 router.get('/recent', (req, res) => {
     res.json(suggest.recentUrls(req.user.id, req.query.q || ''));
 });
@@ -156,6 +167,7 @@ router.post('/browse', (req, res) => {
         return res.status(429).json({ error: `You already have ${max} active sessions. End one before starting another.` });
     }
 
+    if (searchQuery) searchHistory.record(user.id, searchQuery);
     if (searchQuery) events.record('search', { userId: user.id, detail: `${search.engine().name}: ${searchQuery.slice(0, 200)}` });
     const ticket = mintTicket({ uid: user.id, v: user.token_version, url: target, pool: poolId, cid: clientId(), until: req.token && req.token.idx });
     res.json({ redirect: `${config.proxyBaseUrl}/__portal/start?t=${encodeURIComponent(ticket)}` });

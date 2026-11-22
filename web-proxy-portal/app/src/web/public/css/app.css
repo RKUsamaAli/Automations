@@ -467,8 +467,8 @@ td.bad { color: var(--danger); font-weight: 600; }
    cycles on tap, so the top bar keeps the brand on one line. */
 .topbar .brand span:last-child { white-space: nowrap; }
 @media (max-width: 520px) {
-    .topbar .theme-switch { border: 0; padding: 0; background: transparent; }
-    .topbar .theme-switch button:not([aria-pressed="true"]) { display: none; }
+    .top-actions > .theme-slot .theme-switch { border: 0; padding: 0; background: transparent; }
+    .top-actions > .theme-slot .theme-switch button:not([aria-pressed="true"]) { display: none; }
 }
 
 /* Session proxy: status dot, "via ..." line, picker dialog */
@@ -538,3 +538,58 @@ input[role="switch"]:focus-visible { outline: 2px solid var(--accent); outline-o
 .result .r-title:hover { text-decoration: underline; }
 .result .r-snippet { font-size: 0.875rem; color: var(--text); opacity: 0.85; }
 .result-skeleton span { display: block; height: 0.875rem; border-radius: 0.25rem; background: var(--surface-2); margin: 0.5rem 0; animation: pulse 1.2s ease-in-out infinite; }
+
+/* ---------------------------------------------------- slim top bar + menus */
+.topbar.slim { justify-content: space-between; gap: 0.75rem; }
+.top-actions { display: flex; align-items: center; gap: 0.5rem; margin-left: auto; min-width: 0; }
+.page-actions { display: contents; }
+.btn.ghost { border-color: transparent; background: none; color: var(--muted); }
+.btn.ghost:hover { background: var(--hover); color: var(--text); }
+.btn.small { height: 2rem; min-height: 2rem; padding: 0 0.75rem; font-size: 0.8125rem; display: inline-flex; align-items: center; gap: 0.375rem; }
+.btn .icon, .top-actions .icon { width: 1rem; height: 1rem; }
+.menu-wrap { position: relative; }
+.menu-button { display: inline-flex; align-items: center; gap: 0.5rem; height: 2.25rem; min-height: 0; padding: 0 0.5rem 0 0.25rem; border-radius: 999px; border: 1px solid var(--border); background: var(--surface); color: var(--text); }
+.menu-button .chev, .conn-chip .chev { width: 0.875rem; height: 0.875rem; color: var(--muted); }
+.menu { position: absolute; right: 0; top: calc(100% + 0.5rem); z-index: 40; min-width: 14rem; padding: 0.375rem; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: 0 12px 32px rgba(15, 20, 40, 0.18); }
+.menu[hidden] { display: none; }
+.menu-head { display: grid; padding: 0.5rem 0.625rem 0.625rem; border-bottom: 1px solid var(--border); margin-bottom: 0.25rem; }
+.menu [role=menuitem] { display: flex; align-items: center; gap: 0.625rem; width: 100%; min-height: 2.25rem; height: auto; padding: 0.375rem 0.625rem; border: 0; border-radius: var(--radius); background: none; color: var(--text); font: inherit; text-align: left; justify-content: flex-start; }
+.menu [role=menuitem]:hover, .menu [role=menuitem]:focus-visible { background: var(--hover); text-decoration: none; outline: none; }
+.menu [role=menuitem][aria-current=page] { color: var(--accent); font-weight: 600; }
+.menu [role=menuitem] .icon { width: 1.0625rem; height: 1.0625rem; color: var(--muted); }
+.menu-theme { display: flex; align-items: center; justify-content: space-between; padding: 0.375rem 0.625rem; margin: 0.25rem 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+
+/* proxy chip (start page, top bar right) */
+.conn-chip { display: inline-flex; align-items: center; gap: 0.5rem; height: 2.25rem; min-height: 0; max-width: 16rem; padding: 0 0.625rem 0 0.75rem; border-radius: 999px; border: 1px solid var(--border); background: var(--surface); color: var(--text); font-size: 0.8125rem; font-weight: 500; box-shadow: 0 1px 4px rgba(15, 20, 40, 0.06); }
+.conn-chip .conn-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conn-panel { width: min(20rem, calc(100vw - 2rem)); padding: 0.875rem; display: grid; gap: 0.75rem; }
+.conn-panel .via { display: grid; gap: 0.375rem; }
+.conn-panel .via.hidden { display: none; }
+
+/* start page: just the search box, centred */
+.home-body { min-height: 100vh; min-height: 100dvh; display: flex; flex-direction: column; }
+.home { flex: 1; display: flex; justify-content: center; align-items: center; padding: 1.5rem 1rem 12vh; }
+.home-center { width: min(40rem, 100%); display: flex; flex-direction: column; align-items: center; }
+.home-brand { display: flex; align-items: center; gap: 0.625rem; font-size: 2rem; font-weight: 650; letter-spacing: -0.02em; margin: 0 0 1.75rem; }
+.home-brand .brand-mark { width: 2.75rem; height: 2.75rem; }
+.home-center > .alert { width: 100%; margin-top: 0.75rem; }
+.recent { width: 100%; margin-top: 1.5rem; }
+.recent.hidden { display: none; }
+.recent-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; padding: 0 0.25rem; }
+.recent-head h2 { margin: 0; font-size: 0.75rem; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
+.recent-list { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.recent-list li { display: inline-flex; align-items: center; max-width: 100%; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); }
+.recent-list li:hover { border-color: var(--accent); }
+.recent-q { display: inline-flex; align-items: center; gap: 0.375rem; height: 2rem; min-height: 0; padding: 0 0.25rem 0 0.75rem; border: 0; background: none; color: var(--text); font-size: 0.875rem; min-width: 0; }
+.recent-q span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 16rem; }
+.recent-q .icon { width: 0.875rem; height: 0.875rem; color: var(--muted); flex: none; }
+.recent-x { height: 2rem; min-height: 0; width: 2rem; padding: 0; border: 0; background: none; color: var(--muted); font-size: 1.125rem; border-radius: 999px; }
+.recent-x:hover { color: var(--text); background: var(--hover); }
+.home .start-sites { margin-top: 1.75rem; }
+@media (max-width: 640px) {
+    .home { align-items: flex-start; padding-top: 14vh; }
+    .home-brand { font-size: 1.625rem; }
+    .conn-chip { max-width: 9.5rem; }
+    .top-admin span { display: none; }
+    .topbar.slim .brand span:last-child { display: none; }
+}
