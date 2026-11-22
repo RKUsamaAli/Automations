@@ -279,6 +279,43 @@ test.describe.serial('full product journey', () => {
         await shot(admin, '20-admin-settings');
     });
 
+    test('long lists load in batches while scrolling; the summary counts the whole set', async () => {
+        // 130 portal API calls -> 130+ rows of type "Portal API" in the request log
+        const api = admin.context().request;
+        for (let i = 0; i < 130; i++) await api.get(S.appUrl + '/api/admin/overview');
+        await admin.getByRole('button', { name: 'Requests' }).click();
+        await admin.locator('#rkind').selectOption('api');
+        const rows = admin.locator('#req-list tbody tr');
+        const summary = admin.locator('#req-list .summary-bar');
+        // rows are written in 2 s batches: reload the list until all 130 are counted
+        await expect(async () => {
+            await admin.locator('#rhours').selectOption('1');
+            await admin.locator('#rhours').selectOption('24');
+            await expect(summary).toBeVisible({ timeout: 1000 });
+            const total = Number((await summary.locator('b').first().textContent() || '0').replace(/\D/g, ''));
+            expect(total).toBeGreaterThanOrEqual(130);
+        }).toPass({ timeout: 15000 });
+        const total = Number((await summary.locator('b').first().textContent() || '0').replace(/\D/g, ''));
+        // first request: one batch of 50 rows + the summary of everything
+        await expect(rows).toHaveCount(50);
+        await expect(admin.locator('#req-list .lazy-status')).toHaveText(`50 of ${total.toLocaleString('en-US')} shown · scroll for more`);
+        await shot(admin, '18d-admin-requests-summary', { fullPage: false });
+        // scrolling to the end loads the next batch, and the next...
+        await rows.last().scrollIntoViewIfNeeded();
+        await expect(rows).toHaveCount(100);
+        await admin.mouse.wheel(0, 100000);
+        await expect(rows).toHaveCount(Math.min(150, total));
+        await expect(summary.locator('b').first()).toHaveText(total.toLocaleString('en-US'), { useInnerText: true }); // summary unchanged
+        // keyboard / fallback path: "Load more" until everything is shown
+        await expect(async () => {
+            const more = admin.locator('#req-list [data-more]');
+            if (await more.isVisible()) await more.click();
+            await expect(admin.locator('#req-list .lazy-status')).toHaveText(/^All .* shown$/, { timeout: 500 });
+        }).toPass({ timeout: 20000 });
+        await expect(rows).toHaveCount(total); // every row exactly once, nothing skipped
+        await shot(admin, '18e-admin-requests-scrolled', { fullPage: false });
+    });
+
     test('a page that fails shows a friendly error with a reference; the admin finds it with the steps', async () => {
         await phone.goto(S.appUrl + '/');
         await phone.locator('#url').fill('http://broken.localtest/checkout');
@@ -290,7 +327,7 @@ test.describe.serial('full product journey', () => {
 
         await admin.getByRole('button', { name: /Errors/ }).click();
         await admin.locator('#error-q').fill(ref);
-        await expect(admin.getByText('1 shown')).toBeVisible(); // search applied (debounced)
+        await expect(admin.getByText('All 1 shown', { exact: true })).toBeVisible(); // search applied (debounced)
         await admin.waitForTimeout(400);
         const row = admin.locator('tr', { hasText: ref });
         await expect(row).toBeVisible();

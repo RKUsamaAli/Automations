@@ -12,6 +12,7 @@
  */
 const db = require('../db');
 const { redactUrl } = require('../lib/redact');
+const paging = require('../lib/paging');
 const log = require('../lib/logger')('request-log');
 
 const LEVEL = () => (process.env.REQUEST_LOG_LEVEL || 'pages').toLowerCase();
@@ -77,10 +78,10 @@ function flush() {
 }
 
 /**
- * Filtered list for Admin -> Requests.
- * @param {object} f { userId, sessionId, kind, status ('ok'|'failed'|code), q, since, limit }
+ * WHERE clause shared by the list, the paged list and the summary.
+ * @param {object} f { userId, sessionId, kind, status ('ok'|'failed'|code), q, since }
  */
-function list(f = {}) {
+function whereFor(f = {}) {
     const where = [];
     const args = [];
     const filter = (sql, value) => {
@@ -102,19 +103,89 @@ function list(f = {}) {
         args.push(like, like, String(f.q), like);
     }
     if (f.since) filter('r.ts >= ?', Number(f.since));
+    return { where, args };
+}
+
+const FROM = 'FROM request_log r LEFT JOIN users u ON u.id = r.user_id';
+const whereSql = (where) => (where.length ? 'WHERE ' + where.join(' AND ') : '');
+
+/** Filtered list for Admin -> Requests (CSV export, tests). Newest first. */
+function list(f = {}) {
+    const { where, args } = whereFor(f);
     args.push(Math.min(Number(f.limit) || 200, 2000));
-    return db
+    return db.get().prepare(`SELECT r.*, u.username ${FROM} ${whereSql(where)} ORDER BY r.id DESC LIMIT ?`).all(...args);
+}
+
+/**
+ * One batch for the lazy-loaded table: newest first, continuing after `cursor`.
+ * @returns {{items: object[], nextCursor: string|null}}
+ */
+function page(f = {}, { cursor = null, limit } = {}) {
+    const n = paging.limitOf(limit);
+    const { where, args } = whereFor(f);
+    const after = paging.decodeCursor(cursor);
+    if (after) {
+        where.push('r.id < ?');
+        args.push(Number(after[0]));
+    }
+    args.push(n + 1);
+    const rows = db.get().prepare(`SELECT r.*, u.username ${FROM} ${whereSql(where)} ORDER BY r.id DESC LIMIT ?`).all(...args);
+    return paging.toPage(rows, n, (r) => [r.id]);
+}
+
+/** Totals over the WHOLE filtered set (shown above the table). */
+function pageSummary(f = {}) {
+    const { where, args } = whereFor(f);
+    const row = db
         .get()
         .prepare(
-            `SELECT r.*, u.username FROM request_log r LEFT JOIN users u ON u.id = r.user_id
-             ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY r.id DESC LIMIT ?`
+            `SELECT COUNT(*) AS total,
+                    SUM(CASE WHEN r.status = 0 OR r.status >= 400 THEN 1 ELSE 0 END) AS failed,
+                    CAST(AVG(r.ms) AS INTEGER) AS avg_ms,
+                    SUM(COALESCE(r.bytes, 0)) AS bytes,
+                    COUNT(DISTINCT r.user_id) AS users,
+                    COUNT(DISTINCT r.session_id) AS sessions
+             ${FROM} ${whereSql(where)}`
         )
-        .all(...args);
+        .get(...args);
+    return {
+        total: row.total,
+        failed: row.failed || 0,
+        ok: row.total - (row.failed || 0),
+        avgMs: row.avg_ms || 0,
+        bytes: row.bytes || 0,
+        users: row.users,
+        sessions: row.sessions
+    };
 }
 
 /** Everything one browsing session did, oldest first. */
 function sessionTimeline(sessionId, limit = 500) {
     return db.get().prepare('SELECT * FROM request_log WHERE session_id = ? ORDER BY id DESC LIMIT ?').all(sessionId, limit).reverse();
+}
+
+/** Lazy-loaded session timeline: newest first (the drawer shows the latest activity on top). */
+function sessionTimelinePage(sessionId, { cursor = null, limit } = {}) {
+    const n = paging.limitOf(limit);
+    const after = paging.decodeCursor(cursor);
+    const rows = after
+        ? db.get().prepare('SELECT * FROM request_log WHERE session_id = ? AND id < ? ORDER BY id DESC LIMIT ?').all(sessionId, Number(after[0]), n + 1)
+        : db.get().prepare('SELECT * FROM request_log WHERE session_id = ? ORDER BY id DESC LIMIT ?').all(sessionId, n + 1);
+    return paging.toPage(rows, n, (r) => [r.id]);
+}
+
+/** Totals for one session's whole timeline. */
+function sessionTimelineSummary(sessionId) {
+    const r = db
+        .get()
+        .prepare(
+            `SELECT COUNT(*) AS total, SUM(CASE WHEN kind = 'page' THEN 1 ELSE 0 END) AS pages,
+                    SUM(CASE WHEN status = 0 OR status >= 400 THEN 1 ELSE 0 END) AS failed,
+                    SUM(COALESCE(bytes, 0)) AS bytes, MIN(ts) AS first_ts, MAX(ts) AS last_ts
+             FROM request_log WHERE session_id = ?`
+        )
+        .get(sessionId);
+    return { total: r.total, pages: r.pages || 0, failed: r.failed || 0, bytes: r.bytes || 0, firstTs: r.first_ts, lastTs: r.last_ts };
 }
 
 /** Recent rows for a user (used to enrich error reports). */
@@ -140,4 +211,4 @@ function prune(days = 14) {
     return db.get().prepare('DELETE FROM request_log WHERE ts < ?').run(Date.now() - days * 86400000).changes;
 }
 
-module.exports = { add, flush, list, sessionTimeline, recentForUser, summary, prune, wanted };
+module.exports = { add, flush, list, page, pageSummary, sessionTimeline, sessionTimelinePage, sessionTimelineSummary, recentForUser, summary, prune, wanted };

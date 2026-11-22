@@ -20,6 +20,7 @@
  * kept for the whole session ("sticky") - see src/proxy/upstream.js.
  */
 const db = require('../db');
+const paging = require('../lib/paging');
 const TtlCache = require('../lib/ttlCache');
 const { parseProxyList } = require('../lib/proxyString');
 const { assertPublicHost } = require('../lib/netGuard');
@@ -216,6 +217,56 @@ function listProxies(poolId) {
         .all(poolId);
 }
 
+/** One lazy-loaded batch of a pool's proxies (in import order). `status` filters healthy/slow/dead/unknown/disabled. */
+function pageProxies(poolId, { status = '', q = '' } = {}, { cursor = null, limit } = {}) {
+    const n = paging.limitOf(limit);
+    const where = ['pool_id = ?'];
+    const args = [poolId];
+    if (status === 'disabled') where.push('enabled = 0');
+    else if (status) {
+        where.push('enabled = 1 AND status = ?'); // same buckets as proxySummary()
+        args.push(String(status));
+    }
+    if (q) {
+        where.push('host LIKE ?');
+        args.push(`%${String(q).slice(0, 100)}%`);
+    }
+    const after = paging.decodeCursor(cursor);
+    if (after) {
+        where.push('id > ?');
+        args.push(Number(after[0]));
+    }
+    args.push(n + 1);
+    const rows = db
+        .get()
+        .prepare(
+            `SELECT ${PROXY_PUBLIC},
+                (SELECT COUNT(*) FROM sessions s WHERE s.proxy_id = proxies.id AND s.ended_at IS NULL) AS active_sessions
+             FROM proxies WHERE ${where.join(' AND ')} ORDER BY id LIMIT ?`
+        )
+        .all(...args);
+    return paging.toPage(rows, n, (r) => [r.id]);
+}
+
+/** Status counts for the whole pool. */
+function proxySummary(poolId) {
+    const r = db
+        .get()
+        .prepare(
+            `SELECT COUNT(*) AS total,
+                    SUM(CASE WHEN enabled = 1 AND status = 'healthy' THEN 1 ELSE 0 END) AS healthy,
+                    SUM(CASE WHEN enabled = 1 AND status = 'slow' THEN 1 ELSE 0 END) AS slow,
+                    SUM(CASE WHEN enabled = 1 AND status = 'dead' THEN 1 ELSE 0 END) AS dead,
+                    SUM(CASE WHEN enabled = 1 AND status = 'unknown' THEN 1 ELSE 0 END) AS unknown,
+                    SUM(CASE WHEN enabled = 0 THEN 1 ELSE 0 END) AS disabled,
+                    CAST(AVG(CASE WHEN status <> 'dead' THEN latency_ms END) AS INTEGER) AS avg_latency
+             FROM proxies WHERE pool_id = ?`
+        )
+        .get(poolId);
+    const k = (v) => v || 0;
+    return { total: r.total, healthy: k(r.healthy), slow: k(r.slow), dead: k(r.dead), unknown: k(r.unknown), disabled: k(r.disabled), avgLatency: r.avg_latency };
+}
+
 /** Full rows INCLUDING credentials - only for the proxy engine / health checker. */
 function allProxiesWithSecrets() {
     return db.get().prepare('SELECT * FROM proxies').all();
@@ -360,6 +411,8 @@ function isUsable(proxy) {
 
 module.exports = {
     POOL_TYPES,
+    pageProxies,
+    proxySummary,
     listPools,
     listAccessiblePools,
     canUsePool,

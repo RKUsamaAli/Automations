@@ -297,3 +297,32 @@ test('admin can read the request log, a session timeline and server health', asy
     const csv = await admin.req('GET', '/api/admin/requests.csv?hours=1');
     assert.match(csv.text, /^time_utc,source,kind,username/);
 });
+
+test('admin lists: ?paged=1 returns batches + whole-set summary on the first batch only', async () => {
+    const c = client();
+    await c.req('GET', '/login');
+    await c.req('POST', '/api/auth/login', { username: 'admin1', password: 'adminpass123' });
+    const events = require('../src/services/events');
+    for (let i = 0; i < 7; i++) events.record('paged_api_event', { detail: String(i) });
+
+    const first = await c.req('GET', '/api/admin/events?paged=1&limit=3&type=paged_api_event');
+    assert.equal(first.status, 200);
+    assert.equal(first.json.items.length, 3);
+    assert.ok(first.json.nextCursor);
+    assert.equal(first.json.summary.total, 7, 'summary covers every matching row, not just this batch');
+
+    const second = await c.req('GET', `/api/admin/events?paged=1&limit=3&type=paged_api_event&cursor=${encodeURIComponent(first.json.nextCursor)}`);
+    assert.equal(second.json.items.length, 3);
+    assert.equal(second.json.summary, undefined, 'later batches only add rows');
+    assert.ok(second.json.items[0].id < first.json.items[2].id);
+
+    for (const path of ['/api/admin/requests?paged=1', '/api/admin/errors?paged=1&status=all', '/api/admin/users?paged=1', '/api/admin/sessions?paged=1']) {
+        const r = await c.req('GET', path);
+        assert.equal(r.status, 200, path);
+        assert.ok(Array.isArray(r.json.items), path);
+        assert.ok(r.json.summary && typeof r.json.summary.total === 'number', path);
+        assert.ok('nextCursor' in r.json, path);
+    }
+    // The plain (unpaged) answer stays an array for pickers and scripts.
+    assert.ok(Array.isArray((await c.req('GET', '/api/admin/users')).json));
+});

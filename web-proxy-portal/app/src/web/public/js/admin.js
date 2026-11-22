@@ -35,11 +35,135 @@
         opts = opts || {};
         return '<section class="panel' + (opts.cls ? ' ' + opts.cls : '') + '"' + (opts.id ? ' id="' + opts.id + '"' : '') + '><div class="panel-head"><h2>' + title + '</h2>' + (opts.actions || '') + '</div>' + body + '</section>';
     }
+    function tableHead(headers) {
+        return '<thead><tr>' + headers.map(function (h) {
+            return '<th' + (h.num ? ' class="num"' : '') + '>' + (h.label ? esc(h.label) : '<span class="sr-only">Actions</span>') + '</th>';
+        }).join('') + '</tr></thead>';
+    }
     function table(headers, rows, emptyText) {
         if (!rows.length) return '<div class="empty"><strong>' + esc(emptyText || 'Nothing here yet') + '</strong></div>';
-        return '<div class="table-wrap"><table><thead><tr>' + headers.map(function (h) {
-            return '<th' + (h.num ? ' class="num"' : '') + '>' + (h.label ? esc(h.label) : '<span class="sr-only">Actions</span>') + '</th>';
-        }).join('') + '</tr></thead><tbody>' + rows.join('') + '</tbody></table></div>';
+        return '<div class="table-wrap"><table>' + tableHead(headers) + '<tbody>' + rows.join('') + '</tbody></table></div>';
+    }
+    function int(n) { return Number(n || 0).toLocaleString(); }
+
+    // ========================================================= lazy tables ==
+    /**
+     * A table that loads in batches of 50 while the user scrolls.
+     *
+     * - The server pages with a cursor (no duplicates or gaps while new rows
+     *   arrive). The FIRST response also carries `summary` - totals for the
+     *   whole filtered set - which `cfg.summary` renders above the table and
+     *   which stays put while more rows load.
+     * - An IntersectionObserver watches a marker below the last row and asks
+     *   for the next batch ~600 px before the user reaches the end.
+     * - "Load more" is always available too (keyboard, screen readers, and
+     *   browsers without IntersectionObserver). A live status says
+     *   "50 of 1,234 shown".
+     * - Buttons in rows are handled by one delegated listener:
+     *   cfg.actions = { 'data-edit': function (button, value, item) {...} }
+     *
+     * cfg: { mount, url, headers, row(item), empty, summary(s) -> html,
+     *        total(s) -> number, actions, key(item), root (scroll container,
+     *        default = page), limit }
+     * Returns { items, reload(), byKey(value) }.
+     */
+    var BATCH = 50;
+    function lazyTable(cfg) {
+        var mount = cfg.mount;
+        if (mount._lazy) mount._lazy.destroy();
+        var key = cfg.key || function (item) { return item.id; };
+        var self = { items: [], summary: null };
+        var cursor = null, done = false, loading = false, alive = true, tbody = null;
+        mount._lazy = self;
+        mount.innerHTML = '<div class="lazy-summary"></div><div class="lazy-body"><div class="lazy-skeleton" aria-hidden="true"><span></span><span></span><span></span></div></div>' +
+            '<div class="lazy-foot hidden"><span class="lazy-status" role="status" aria-live="polite"></span><button type="button" class="small" data-more>Load more</button></div>' +
+            '<div class="lazy-sentinel" aria-hidden="true"></div>';
+        var summaryBox = mount.querySelector('.lazy-summary');
+        var body = mount.querySelector('.lazy-body');
+        var foot = mount.querySelector('.lazy-foot');
+        var status = mount.querySelector('.lazy-status');
+        var more = mount.querySelector('[data-more]');
+        var sentinel = mount.querySelector('.lazy-sentinel');
+        var io = 'IntersectionObserver' in window ? new IntersectionObserver(function (entries) {
+            if (entries[entries.length - 1].isIntersecting) load();
+        }, { root: cfg.root || null, rootMargin: '0px 0px 600px 0px' }) : null;
+
+        function total() { return self.summary ? (cfg.total ? cfg.total(self.summary) : self.summary.total) : null; }
+        function updateFoot(errorText) {
+            var t = total();
+            foot.classList.toggle('hidden', !self.items.length && !errorText);
+            more.classList.toggle('hidden', done && !errorText);
+            more.textContent = errorText ? 'Try again' : 'Load more';
+            more.disabled = loading;
+            if (errorText) status.textContent = errorText;
+            else if (loading) status.textContent = 'Loading more…';
+            else if (done) status.textContent = 'All ' + int(self.items.length) + ' shown';
+            else status.textContent = int(self.items.length) + (t != null ? ' of ' + int(t) : '') + ' shown · scroll for more';
+        }
+        function append(items) {
+            items.forEach(function (it) { self.items.push(it); });
+            if (!tbody) {
+                if (!items.length) {
+                    body.innerHTML = '<div class="empty"><strong>' + esc(cfg.empty || 'Nothing here yet') + '</strong></div>';
+                    return;
+                }
+                body.innerHTML = '<div class="table-wrap"><table>' + tableHead(cfg.headers) + '<tbody></tbody></table></div>';
+                tbody = body.querySelector('tbody');
+            }
+            tbody.insertAdjacentHTML('beforeend', items.map(cfg.row).join(''));
+        }
+        async function load() {
+            if (loading || done || !alive) return;
+            if (!mount.isConnected) return self.destroy();
+            loading = true;
+            updateFoot();
+            var url = cfg.url + (cfg.url.indexOf('?') >= 0 ? '&' : '?') + 'paged=1&limit=' + (cfg.limit || BATCH) + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '');
+            try {
+                var res = await P.api('GET', url);
+                if (!alive) return;
+                if (res.summary) {
+                    self.summary = res.summary;
+                    if (cfg.summary) summaryBox.innerHTML = cfg.summary(res.summary, res);
+                    if (cfg.onFirst) cfg.onFirst(res);
+                }
+                append(res.items);
+                cursor = res.nextCursor;
+                done = !cursor;
+                loading = false;
+                updateFoot();
+                // Re-arm: if the new rows did not fill the screen, the marker
+                // is still visible and the observer fires again right away.
+                if (!done && io) { io.unobserve(sentinel); io.observe(sentinel); }
+            } catch (err) {
+                if (!alive) return;
+                loading = false;
+                if (!self.items.length && !tbody) body.innerHTML = '';
+                updateFoot(err.message);
+            }
+        }
+        more.addEventListener('click', load);
+        body.addEventListener('click', function (e) {
+            var btn = e.target.closest('button');
+            if (!btn || !cfg.actions) return;
+            Object.keys(cfg.actions).some(function (attr) {
+                if (!btn.hasAttribute(attr)) return false;
+                var value = btn.getAttribute(attr);
+                cfg.actions[attr](btn, value, self.byKey(value));
+                return true;
+            });
+        });
+        self.byKey = function (value) { return self.items.find(function (it) { return String(key(it)) === String(value); }); };
+        self.destroy = function () { alive = false; if (io) io.disconnect(); };
+        self.reload = function () { return lazyTable(cfg); };
+        if (io) io.observe(sentinel);
+        load(); // first batch right away; the observer asks for the rest
+        return self;
+    }
+    /** Compact one-line summary: [[label, value, tone?], ...]. */
+    function summaryBar(items) {
+        return '<div class="summary-bar">' + items.filter(Boolean).map(function (i) {
+            return '<span' + (i[2] ? ' class="' + i[2] + '"' : '') + '>' + esc(i[0]) + ' <b>' + esc(i[1]) + '</b></span>';
+        }).join('') + '</div>';
     }
     function time(ms) {
         if (!ms) return '-';
@@ -285,29 +409,51 @@
     }
 
     // ================================================================ users ==
+    var userFilter = { q: '' };
+    var USER_HEADERS = [{ label: 'User' }, { label: 'Role' }, { label: 'Sign-in' }, { label: 'Pool' }, { label: 'Limits' }, { label: 'Last sign-in' }, { label: '' }];
+    function userRow(u) {
+        return '<tr><td><div class="cell-main">' + esc(u.username) + (u.enabled ? '' : ' <span class="badge bad">Disabled</span>') + '</div>' + (u.email || u.note ? '<div class="cell-sub">' + esc([u.email, u.note].filter(Boolean).join(' · ')) + '</div>' : '') + '</td>' +
+            '<td>' + (u.role === 'admin' ? '<span class="badge accent plain">Admin</span>' : 'User') + '</td>' +
+            '<td class="small">' + [u.has_password ? 'Password' : '', u.has_token ? 'Access code' : ''].filter(Boolean).join(', ') + '</td>' +
+            '<td>' + esc(u.pool_id ? poolName(u.pool_id) : 'Automatic') + '</td>' +
+            '<td class="small">' + (u.rate_limit_rpm != null ? esc(u.rate_limit_rpm) + '/min' : 'Default') + ' · ' + (u.bandwidth_limit_mb_day != null ? (u.bandwidth_limit_mb_day ? esc(u.bandwidth_limit_mb_day) + ' MB/day' : 'Unlimited') : 'Default') + '</td>' +
+            '<td>' + (u.last_login_at ? time(u.last_login_at) : '<span class="subtle">Never</span>') + '</td>' +
+            '<td class="actions"><button type="button" class="small" data-edit="' + u.id + '">Edit</button><button type="button" class="small" data-token="' + u.id + '">New code</button><button type="button" class="small danger" data-del="' + u.id + '" aria-label="Delete ' + esc(u.username) + '">Delete</button></td></tr>';
+    }
+
     async function usersView() {
         await loadPools();
-        var all = await P.api('GET', '/api/admin/users');
-        var pending = all.filter(function (u) { return u.pending; });
-        var list = all.filter(function (u) { return !u.pending; });
-        setCount('#pending-count', pending.length);
+        var pendingRes = await P.api('GET', '/api/admin/users?paged=1&pending=1&limit=200');
+        var pending = pendingRes.items;
+        setCount('#pending-count', pendingRes.summary.pending);
         view.innerHTML = pageHead('Users', 'Accounts, sign-in methods, proxy pools and limits.', '<button type="button" class="primary" id="add">Add user</button>') +
             (pending.length ? panel('Awaiting approval <span class="count">' + pending.length + '</span>', '<ul class="rows">' + pending.map(function (u) {
                 return '<li><span class="avatar" aria-hidden="true">' + esc(u.username.charAt(0)) + '</span><div class="grow"><div class="title">' + esc(u.username) + '</div><div class="meta">' +
                     esc((u.email ? u.email + ' · ' : '') + 'signed up ' + P.timeAgo(u.created_at)) + '</div></div>' +
                     '<div class="actions"><button type="button" class="small primary" data-approve="' + u.id + '">Approve</button><button type="button" class="small danger" data-reject="' + u.id + '">Reject</button></div></li>';
             }).join('') + '</ul>') : '') +
-            panel('All users <span class="muted">(' + list.length + ')</span>', table(
-                [{ label: 'User' }, { label: 'Role' }, { label: 'Sign-in' }, { label: 'Pool' }, { label: 'Limits' }, { label: 'Last sign-in' }, { label: '' }],
-                list.map(function (u) {
-                    return '<tr><td><div class="cell-main">' + esc(u.username) + (u.enabled ? '' : ' <span class="badge bad">Disabled</span>') + '</div>' + (u.email || u.note ? '<div class="cell-sub">' + esc([u.email, u.note].filter(Boolean).join(' · ')) + '</div>' : '') + '</td>' +
-                        '<td>' + (u.role === 'admin' ? '<span class="badge accent plain">Admin</span>' : 'User') + '</td>' +
-                        '<td class="small">' + [u.has_password ? 'Password' : '', u.has_token ? 'Access code' : ''].filter(Boolean).join(', ') + '</td>' +
-                        '<td>' + esc(u.pool_id ? poolName(u.pool_id) : 'Automatic') + '</td>' +
-                        '<td class="small">' + (u.rate_limit_rpm != null ? esc(u.rate_limit_rpm) + '/min' : 'Default') + ' · ' + (u.bandwidth_limit_mb_day != null ? (u.bandwidth_limit_mb_day ? esc(u.bandwidth_limit_mb_day) + ' MB/day' : 'Unlimited') : 'Default') + '</td>' +
-                        '<td>' + (u.last_login_at ? time(u.last_login_at) : '<span class="subtle">Never</span>') + '</td>' +
-                        '<td class="actions"><button type="button" class="small" data-edit="' + u.id + '">Edit</button><button type="button" class="small" data-token="' + u.id + '">New code</button><button type="button" class="small danger" data-del="' + u.id + '" aria-label="Delete ' + esc(u.username) + '">Delete</button></td></tr>';
-                }), 'No users'));
+            '<section class="panel" id="users-panel"><div class="toolbar"><input type="search" id="uq" placeholder="Search username or e-mail" value="' + esc(userFilter.q) + '" aria-label="Search users"></div><div id="users-list"></div></section>';
+        var list;
+        function loadList() {
+            list = lazyTable({
+                mount: P.$('#users-list'),
+                url: '/api/admin/users' + (userFilter.q ? '?q=' + encodeURIComponent(userFilter.q) : ''),
+                headers: USER_HEADERS,
+                row: userRow,
+                empty: userFilter.q ? 'No users match' : 'No users',
+                summary: function (m) {
+                    return summaryBar([['Users', int(m.approved)], ['Admins', int(m.admins)], ['Signed in last 7 days', int(m.active7d)], m.disabled ? ['Disabled', int(m.disabled), 'bad'] : null, m.pending ? ['Awaiting approval', int(m.pending), 'warn'] : null]);
+                },
+                total: function (m) { return m.approved; },
+                actions: { 'data-edit': editUser, 'data-token': newCode, 'data-del': delUser }
+            });
+        }
+        loadList();
+        var qt;
+        P.$('#uq').addEventListener('input', function (e) {
+            clearTimeout(qt);
+            qt = setTimeout(function () { userFilter.q = e.target.value.trim(); loadList(); }, 300);
+        });
 
         on('[data-approve]', 'click', async function (btn) {
             try {
@@ -345,8 +491,7 @@
                 }
             });
         });
-        on('[data-edit]', 'click', function (btn) {
-            var u = list.find(function (x) { return x.id === Number(btn.getAttribute('data-edit')); });
+        function editUser(btn, value, u) {
             openForm({
                 title: 'Edit ' + u.username,
                 fields: [
@@ -366,24 +511,24 @@
                     await P.api('PATCH', '/api/admin/users/' + u.id, patch);
                     if (v.logoutEverywhere) await P.api('POST', '/api/admin/users/' + u.id + '/logout');
                     P.toast('Saved');
-                    usersView();
+                    loadList();
                 }
             });
-        });
-        on('[data-token]', 'click', function (btn) {
+        }
+        function newCode(btn, value) {
             confirmed('The old access code stops working.', async function () {
-                var res = await P.api('POST', '/api/admin/users/' + btn.getAttribute('data-token') + '/token');
+                var res = await P.api('POST', '/api/admin/users/' + value + '/token');
                 showPanel('New access code', secretHtml('Access code', res.accessToken), '<button type="button" class="primary" id="modal-done">Done</button>');
                 P.$('#modal-done').addEventListener('click', closeModal);
-                usersView();
+                loadList();
             }, { title: 'Create a new access code?', confirmLabel: 'Create code' });
-        });
-        on('[data-del]', 'click', function (btn) {
+        }
+        function delUser(btn, value) {
             confirmed('The user is deleted and their sessions end.', async function () {
-                await P.api('DELETE', '/api/admin/users/' + btn.getAttribute('data-del'));
-                usersView();
+                await P.api('DELETE', '/api/admin/users/' + value);
+                loadList();
             }, { title: 'Delete this user?', confirmLabel: 'Delete', danger: true });
-        });
+        }
     }
 
     // ================================================================ pools ==
@@ -458,19 +603,50 @@
         });
     }
 
+    var proxyFilter = { status: '' };
+    function proxyRow(x) {
+        return '<tr><td><span class="mono">' + esc(x.protocol + '://' + (x.username ? x.username + ':•••@' : '') + x.host + ':' + x.port) + '</span>' +
+            (x.last_error && x.status !== 'healthy' ? '<div class="cell-sub">' + esc(x.last_error) + '</div>' : '') + '</td>' +
+            '<td>' + proxyStatus(x) + '</td><td class="num">' + (x.latency_ms != null ? x.latency_ms + ' ms' : '-') + '</td><td class="num">' + x.active_sessions + '</td>' +
+            '<td>' + (x.last_checked_at ? time(x.last_checked_at) : '<span class="subtle">Never</span>') + '</td>' +
+            '<td class="actions"><button type="button" class="small" data-history="' + x.id + '">History</button><button type="button" class="small" data-toggle="' + x.id + '" data-enabled="' + x.enabled + '">' + (x.enabled ? 'Disable' : 'Enable') + '</button><button type="button" class="small danger" data-remove="' + x.id + '">Remove</button></td></tr>';
+    }
     async function poolDetail(poolId) {
         var pool = state.pools.find(function (p) { return p.id === poolId; });
-        var proxies = await P.api('GET', '/api/admin/pools/' + poolId + '/proxies');
         var box = P.$('#pool-detail');
-        box.innerHTML = panel(esc(pool.name) + ' <span class="muted">· ' + proxies.length + ' proxies</span>',
-            table([{ label: 'Proxy' }, { label: 'Status' }, { label: 'Latency', num: true }, { label: 'Sessions', num: true }, { label: 'Last check' }, { label: '' }], proxies.map(function (x) {
-                return '<tr><td><span class="mono">' + esc(x.protocol + '://' + (x.username ? x.username + ':•••@' : '') + x.host + ':' + x.port) + '</span>' +
-                    (x.last_error && x.status !== 'healthy' ? '<div class="cell-sub">' + esc(x.last_error) + '</div>' : '') + '</td>' +
-                    '<td>' + proxyStatus(x) + '</td><td class="num">' + (x.latency_ms != null ? x.latency_ms + ' ms' : '-') + '</td><td class="num">' + x.active_sessions + '</td>' +
-                    '<td>' + (x.last_checked_at ? time(x.last_checked_at) : '<span class="subtle">Never</span>') + '</td>' +
-                    '<td class="actions"><button type="button" class="small" data-history="' + x.id + '">History</button><button type="button" class="small" data-toggle="' + x.id + '" data-enabled="' + x.enabled + '">' + (x.enabled ? 'Disable' : 'Enable') + '</button><button type="button" class="small danger" data-remove="' + x.id + '">Remove</button></td></tr>';
-            }), 'No proxies in this pool yet. Use Import.'),
+        box.innerHTML = panel(esc(pool.name),
+            '<div class="toolbar">' + selectHtml('pstatus', 'Status', proxyFilter.status, [['', 'All proxies'], ['healthy', 'Online'], ['slow', 'Slow'], ['dead', 'Offline'], ['unknown', 'Not checked'], ['disabled', 'Disabled']]) + '</div><div id="proxy-list"></div>',
             { cls: 'mt', actions: '<button type="button" class="small" id="check">Check now</button><button type="button" class="small" id="purge">Remove offline</button><button type="button" class="small primary" id="import">Import</button>' });
+        function loadList() {
+            lazyTable({
+                mount: P.$('#proxy-list'),
+                url: '/api/admin/pools/' + poolId + '/proxies' + (proxyFilter.status ? '?status=' + proxyFilter.status : ''),
+                headers: [{ label: 'Proxy' }, { label: 'Status' }, { label: 'Latency', num: true }, { label: 'Sessions', num: true }, { label: 'Last check' }, { label: '' }],
+                row: proxyRow,
+                empty: proxyFilter.status ? 'No proxies with this status' : 'No proxies in this pool yet. Use Import.',
+                summary: function (m) {
+                    return summaryBar([['Proxies', int(m.total)], ['Online', int(m.healthy), m.healthy ? 'ok' : ''], ['Slow', int(m.slow), m.slow ? 'warn' : ''], ['Offline', int(m.dead), m.dead ? 'bad' : ''], ['Not checked', int(m.unknown)], ['Disabled', int(m.disabled)], m.avgLatency != null ? ['Avg latency', m.avgLatency + ' ms'] : null]);
+                },
+                total: function (m) { return proxyFilter.status ? m[proxyFilter.status === 'dead' ? 'dead' : proxyFilter.status] : m.total; },
+                actions: {
+                    'data-toggle': async function (btn, value) {
+                        try {
+                            await P.api('PATCH', '/api/admin/proxies/' + value, { enabled: btn.getAttribute('data-enabled') !== '1' });
+                            loadList();
+                        } catch (err) { P.toast(err.message); }
+                    },
+                    'data-remove': function (btn, value) {
+                        confirmed('The proxy is removed from the pool.', async function () {
+                            await P.api('DELETE', '/api/admin/proxies/' + value);
+                            loadList();
+                        }, { title: 'Remove this proxy?', confirmLabel: 'Remove', danger: true });
+                    },
+                    'data-history': showProxyHistory
+                }
+            });
+        }
+        loadList();
+        P.$('#pstatus').addEventListener('change', function (e) { proxyFilter.status = e.target.value; loadList(); });
 
         P.$('#import').addEventListener('click', function () {
             openForm({
@@ -504,18 +680,8 @@
                 poolDetail(poolId);
             }, { title: 'Remove offline proxies?', confirmLabel: 'Remove', danger: true });
         });
-        on('[data-toggle]', 'click', async function (btn) {
-            await P.api('PATCH', '/api/admin/proxies/' + btn.getAttribute('data-toggle'), { enabled: btn.getAttribute('data-enabled') !== '1' });
-            poolDetail(poolId);
-        }, box);
-        on('[data-remove]', 'click', function (btn) {
-            confirmed('The proxy is removed from the pool.', async function () {
-                await P.api('DELETE', '/api/admin/proxies/' + btn.getAttribute('data-remove'));
-                poolDetail(poolId);
-            }, { title: 'Remove this proxy?', confirmLabel: 'Remove', danger: true });
-        }, box);
-        on('[data-history]', 'click', async function (btn) {
-            var checks = await P.api('GET', '/api/admin/proxies/' + btn.getAttribute('data-history') + '/checks');
+        async function showProxyHistory(btn, value) {
+            var checks = await P.api('GET', '/api/admin/proxies/' + value + '/checks');
             var pts = checks.slice().reverse().filter(function (c) { return c.ok; }).map(function (c) { return [c.ts, c.latency_ms]; });
             var fails = checks.filter(function (c) { return !c.ok; }).length;
             showPanel('Health history', '<p class="muted">' + checks.length + ' checks, ' + fails + ' failed.</p>' +
@@ -523,45 +689,69 @@
                 '<h3>Checks</h3>' + table([{ label: 'Time' }, { label: 'Result' }, { label: 'Latency', num: true }, { label: 'Error' }], checks.map(function (c) {
                     return '<tr><td>' + time(c.ts) + '</td><td>' + (c.ok ? '<span class="badge ok">OK</span>' : '<span class="badge bad">Failed</span>') + '</td><td class="num">' + (c.latency_ms != null ? c.latency_ms + ' ms' : '-') + '</td><td class="small">' + esc(c.error || '') + '</td></tr>';
                 }), 'Not checked yet'), null, true);
-        }, box);
+        }
     }
 
     // ============================================================= sessions ==
     async function sessionsView() {
-        var list = await P.api('GET', '/api/admin/sessions');
         view.innerHTML = pageHead('Sessions', 'Active browsing sessions. Open the timeline to see every page a session loaded.', '<button type="button" id="reload">Refresh</button>') +
-            panel('Active <span class="muted">(' + list.length + ')</span>', table(
-                [{ label: 'User' }, { label: 'Start page' }, { label: 'Upstream' }, { label: 'Traffic', num: true }, { label: 'Requests', num: true }, { label: 'Last seen' }, { label: '' }],
-                list.map(function (s) {
+            '<section class="panel"><div id="session-list"></div></section>';
+        function loadList() {
+            lazyTable({
+                mount: P.$('#session-list'),
+                url: '/api/admin/sessions',
+                headers: [{ label: 'User' }, { label: 'Start page' }, { label: 'Upstream' }, { label: 'Traffic', num: true }, { label: 'Requests', num: true }, { label: 'Last seen' }, { label: '' }],
+                row: function (s) {
                     return '<tr><td><div class="cell-main">' + esc(s.username) + '</div><div class="cell-sub mono">' + esc(s.client_ip || '') + '</div></td>' +
                         '<td class="small"><div class="truncate maxw" title="' + esc(s.start_url || '') + '">' + esc(s.start_url || '') + '</div></td>' +
                         '<td class="small">' + esc(s.pool_name || '-') + '<div class="cell-sub mono">' + esc(s.proxy_host ? s.proxy_host + ':' + s.proxy_port : 'direct') + '</div></td>' +
-                        '<td class="num">' + esc(P.formatBytes(s.bytes)) + '</td><td class="num">' + s.requests + '</td><td>' + time(s.last_seen_at) + '</td>' +
+                        '<td class="num">' + esc(P.formatBytes(s.bytes)) + '</td><td class="num">' + int(s.requests) + '</td><td>' + time(s.last_seen_at) + '</td>' +
                         '<td class="actions"><button type="button" class="small" data-show="' + esc(s.id) + '">Timeline</button><button type="button" class="small danger" data-end="' + esc(s.id) + '">End</button></td></tr>';
-                }), 'No active sessions'));
-        P.$('#reload').addEventListener('click', sessionsView);
-        on('[data-show]', 'click', function (btn) { sessionTimeline(btn.getAttribute('data-show')); });
-        on('[data-end]', 'click', function (btn) {
-            confirmed('The user will need to start a new session.', async function () {
-                await P.api('POST', '/api/admin/sessions/' + encodeURIComponent(btn.getAttribute('data-end')) + '/end');
-                P.toast('Session will end within a few seconds');
-                sessionsView();
-            }, { title: 'End this session?', confirmLabel: 'End session', danger: true });
-        });
+                },
+                empty: 'No active sessions',
+                summary: function (m) {
+                    return summaryBar([['Active sessions', int(m.total)], ['Users', int(m.users)], ['Requests', int(m.requests)], ['Traffic', P.formatBytes(m.bytes)], m.ending ? ['Ending', int(m.ending), 'warn'] : null]);
+                },
+                actions: {
+                    'data-show': function (btn, value) { sessionTimeline(value); },
+                    'data-end': function (btn, value) {
+                        confirmed('The user will need to start a new session.', async function () {
+                            await P.api('POST', '/api/admin/sessions/' + encodeURIComponent(value) + '/end');
+                            P.toast('Session will end within a few seconds');
+                            loadList();
+                        }, { title: 'End this session?', confirmLabel: 'End session', danger: true });
+                    }
+                }
+            });
+        }
+        loadList();
+        P.$('#reload').addEventListener('click', loadList);
     }
 
+    /** Side panel with every page one session loaded, newest first, loaded while scrolling the panel. */
     async function sessionTimeline(id) {
-        var d = await P.api('GET', '/api/admin/sessions/' + encodeURIComponent(id) + '/timeline');
-        var s = d.session;
-        showPanel('Session ' + id.slice(0, 8), '<dl class="kv">' +
-            '<dt>User</dt><dd>' + esc(s.username || '-') + '</dd><dt>Started</dt><dd>' + esc(P.formatDate(s.created_at)) + '</dd>' +
-            '<dt>Start page</dt><dd>' + esc(s.start_url || '-') + '</dd><dt>Traffic</dt><dd>' + esc(P.formatBytes(s.bytes)) + ' · ' + s.requests + ' requests</dd>' +
-            '<dt>Status</dt><dd>' + (s.ended_at ? 'Ended ' + esc(P.timeAgo(s.ended_at)) + (s.end_reason ? ' (' + esc(s.end_reason) + ')' : '') : 'Active') + '</dd></dl>' +
-            '<h3>Pages and failures (' + d.requests.length + ')</h3>' +
-            table([{ label: 'Time' }, { label: 'Result' }, { label: 'Duration', num: true }, { label: 'Size', num: true }, { label: 'Address' }], d.requests.slice().reverse().map(function (r) {
+        showPanel('Session ' + id.slice(0, 8), '<div id="tl-info"><div class="lazy-skeleton" aria-hidden="true"><span></span><span></span></div></div><h3>Pages and failures</h3><div id="tl-list"></div>', null, true);
+        lazyTable({
+            mount: P.$('#tl-list'),
+            root: P.$('#modal-body .drawer-body'),
+            url: '/api/admin/sessions/' + encodeURIComponent(id) + '/timeline',
+            headers: [{ label: 'Time' }, { label: 'Result' }, { label: 'Duration', num: true }, { label: 'Size', num: true }, { label: 'Address' }],
+            row: function (r) {
                 return '<tr><td>' + time(r.ts) + '</td><td>' + statusBadge(r.status) + '</td><td class="num">' + (r.ms != null ? r.ms + ' ms' : '-') + '</td><td class="num">' + (r.bytes != null ? esc(P.formatBytes(r.bytes)) : '-') + '</td>' +
                     '<td class="small">' + esc(r.url || '') + (r.error ? '<div class="cell-sub">' + esc(r.error) + '</div>' : '') + '</td></tr>';
-            }), 'Nothing logged yet. Pages appear here within a few seconds.'), null, true);
+            },
+            empty: 'Nothing logged yet. Pages appear here within a few seconds.',
+            summary: function (m) {
+                return summaryBar([['Logged', int(m.total)], ['Pages', int(m.pages)], ['Failed', int(m.failed), m.failed ? 'bad' : ''], ['Traffic', P.formatBytes(m.bytes)]]);
+            },
+            onFirst: function (res) {
+                var s = res.session;
+                P.$('#tl-info').innerHTML = '<dl class="kv">' +
+                    '<dt>User</dt><dd>' + esc(s.username || '-') + '</dd><dt>Started</dt><dd>' + esc(P.formatDate(s.created_at)) + '</dd>' +
+                    '<dt>Start page</dt><dd>' + esc(s.start_url || '-') + '</dd><dt>Traffic</dt><dd>' + esc(P.formatBytes(s.bytes)) + ' · ' + int(s.requests) + ' requests</dd>' +
+                    '<dt>Status</dt><dd>' + (s.ended_at ? 'Ended ' + esc(P.timeAgo(s.ended_at)) + (s.end_reason ? ' (' + esc(s.end_reason) + ')' : '') : 'Active') + '</dd></dl>';
+            }
+        });
     }
 
     // ================================================================ sites ==
@@ -651,31 +841,47 @@
 
     // ============================================================= requests ==
     var reqFilter = { q: '', kind: 'activity', status: '', hours: '24' };
-    async function requestsView() {
-        var qs = 'hours=' + reqFilter.hours + (reqFilter.q ? '&q=' + encodeURIComponent(reqFilter.q) : '') + (reqFilter.kind ? '&kind=' + reqFilter.kind : '') + (reqFilter.status ? '&status=' + reqFilter.status : '');
-        var rows = await P.api('GET', '/api/admin/requests?' + qs + '&limit=300');
+    function requestsView() {
         var TYPE = { page: 'Page', resource: 'Resource', api: 'API', view: 'Portal page' };
+        var qs = function () {
+            return 'hours=' + reqFilter.hours + (reqFilter.q ? '&q=' + encodeURIComponent(reqFilter.q) : '') + (reqFilter.kind ? '&kind=' + reqFilter.kind : '') + (reqFilter.status ? '&status=' + reqFilter.status : '');
+        };
         view.innerHTML = pageHead('Requests', 'What users did: pages opened through the proxy, portal actions and every failure. Successful images and scripts are only stored with REQUEST_LOG_LEVEL=all.',
-            '<a class="btn" href="/api/admin/requests.csv?' + qs + '" download>Export CSV</a>') +
+            '<a class="btn" id="req-csv" href="/api/admin/requests.csv?' + qs() + '" download>Export CSV</a>') +
             '<section class="panel"><div class="toolbar">' +
             '<input type="search" id="rq" placeholder="Search user, site, URL or request id" value="' + esc(reqFilter.q) + '" aria-label="Search requests">' +
             selectHtml('rkind', 'Type', reqFilter.kind, [['activity', 'User activity'], ['', 'All requests'], ['page', 'Proxied pages'], ['resource', 'Proxied resources'], ['api', 'Portal API'], ['view', 'Portal pages']]) +
             selectHtml('rstatus', 'Result', reqFilter.status, [['', 'All results'], ['failed', 'Failed only'], ['ok', 'Successful only']]) +
             selectHtml('rhours', 'Time range', reqFilter.hours, RANGES) +
-            '<span class="muted small">' + rows.length + (rows.length === 300 ? '+' : '') + ' shown</span></div>' +
-            table([{ label: 'Time' }, { label: 'User' }, { label: 'Type' }, { label: 'Result' }, { label: 'Duration', num: true }, { label: 'Size', num: true }, { label: 'Address' }, { label: '' }], rows.map(function (r) {
-                return '<tr><td>' + time(r.ts) + '</td><td>' + esc(r.username || '-') + '</td><td class="small nowrap">' + esc(TYPE[r.kind] || r.kind) + ' <span class="subtle">' + esc(r.method || '') + '</span></td>' +
-                    '<td>' + statusBadge(r.status) + '</td><td class="num">' + (r.ms != null ? r.ms + ' ms' : '-') + '</td><td class="num">' + (r.bytes != null ? esc(P.formatBytes(r.bytes)) : '-') + '</td>' +
-                    '<td class="small"><div class="truncate maxw" title="' + esc(r.url || '') + '">' + esc(r.url || '') + '</div>' + (r.error ? '<div class="cell-sub">' + esc(r.error) + '</div>' : '') + '</td>' +
-                    '<td class="actions">' + (r.session_id ? '<button type="button" class="small" data-session="' + esc(r.session_id) + '">Session</button>' : '') + '</td></tr>';
-            }), 'No requests match') + '</section>';
+            '</div><div id="req-list"></div></section>';
+        function loadList() {
+            P.$('#req-csv').setAttribute('href', '/api/admin/requests.csv?' + qs());
+            lazyTable({
+                mount: P.$('#req-list'),
+                url: '/api/admin/requests?' + qs(),
+                headers: [{ label: 'Time' }, { label: 'User' }, { label: 'Type' }, { label: 'Result' }, { label: 'Duration', num: true }, { label: 'Size', num: true }, { label: 'Address' }, { label: '' }],
+                row: function (r) {
+                    return '<tr><td>' + time(r.ts) + '</td><td>' + esc(r.username || '-') + '</td><td class="small nowrap">' + esc(TYPE[r.kind] || r.kind) + ' <span class="subtle">' + esc(r.method || '') + '</span></td>' +
+                        '<td>' + statusBadge(r.status) + '</td><td class="num">' + (r.ms != null ? r.ms + ' ms' : '-') + '</td><td class="num">' + (r.bytes != null ? esc(P.formatBytes(r.bytes)) : '-') + '</td>' +
+                        '<td class="small"><div class="truncate maxw" title="' + esc(r.url || '') + '">' + esc(r.url || '') + '</div>' + (r.error ? '<div class="cell-sub">' + esc(r.error) + '</div>' : '') + '</td>' +
+                        '<td class="actions">' + (r.session_id ? '<button type="button" class="small" data-session="' + esc(r.session_id) + '">Session</button>' : '') + '</td></tr>';
+                },
+                empty: 'No requests match',
+                summary: function (m) {
+                    var rate = m.total ? Math.round((m.failed / m.total) * 1000) / 10 : 0;
+                    return summaryBar([['Requests', int(m.total)], ['Successful', int(m.ok)], ['Failed', int(m.failed) + (m.failed ? ' (' + rate + '%)' : ''), m.failed ? 'bad' : ''], ['Avg duration', int(m.avgMs) + ' ms'], ['Traffic', P.formatBytes(m.bytes)], ['Users', int(m.users)], ['Sessions', int(m.sessions)]]);
+                },
+                actions: { 'data-session': function (btn, value) { sessionTimeline(value); } }
+            });
+        }
+        loadList();
         var t;
         P.$('#rq').addEventListener('input', function (e) {
             clearTimeout(t);
-            t = setTimeout(function () { reqFilter.q = e.target.value.trim(); requestsView().then(function () { var n = P.$('#rq'); n.focus(); n.setSelectionRange(n.value.length, n.value.length); }); }, 350);
+            t = setTimeout(function () { reqFilter.q = e.target.value.trim(); loadList(); }, 300);
         });
-        [['#rkind', 'kind'], ['#rstatus', 'status'], ['#rhours', 'hours']].forEach(function (p) { P.$(p[0]).addEventListener('change', function (e) { reqFilter[p[1]] = e.target.value; requestsView(); }); });
-        on('[data-session]', 'click', function (btn) { sessionTimeline(btn.getAttribute('data-session')); });
+        [['#rkind', 'kind'], ['#rstatus', 'status'], ['#rhours', 'hours']].forEach(function (p) { P.$(p[0]).addEventListener('change', function (e) { reqFilter[p[1]] = e.target.value; loadList(); }); });
+        return Promise.resolve();
     }
 
     // =============================================================== errors ==
@@ -688,33 +894,49 @@
     function kindLabel(k) { return KIND_LABELS[k] || k.replace(/_/g, ' '); }
     function sevBadge(r) { return '<span class="badge ' + (r.severity === 'warning' ? 'warn' : 'bad') + '">' + esc(kindLabel(r.kind)) + '</span>'; }
 
-    async function errorsView() {
-        var res = await P.api('GET', '/api/admin/errors?status=' + errorFilter.status + '&q=' + encodeURIComponent(errorFilter.q));
-        setCount('#error-count', res.open);
-        var list = res.reports;
+    function errorsView() {
         view.innerHTML = pageHead('Errors', 'Each report holds the steps the user took before the failure, so it can be reproduced. Users see the reference (e.g. E-7K2P9Q) on the error page.', '<a class="btn" href="/api/admin/errors.jsonl?days=30" download>Export (JSON Lines)</a>') +
             '<section class="panel"><div class="toolbar"><div class="seg" role="group" aria-label="Status">' + ['open', 'resolved', 'all'].map(function (st) {
                 return '<button type="button" data-filter="' + st + '" class="' + (errorFilter.status === st ? 'active' : '') + '" aria-pressed="' + (errorFilter.status === st) + '">' + st.charAt(0).toUpperCase() + st.slice(1) + '</button>';
             }).join('') + '</div>' +
             '<input type="search" id="error-q" placeholder="Search reference, message, site, user" value="' + esc(errorFilter.q) + '" aria-label="Search errors">' +
-            '<span class="muted small">' + list.length + ' shown</span></div>' +
-            table([{ label: 'Reference' }, { label: 'What' }, { label: 'Where' }, { label: 'User' }, { label: 'Message' }, { label: 'Last seen' }, { label: '' }], list.map(function (r) {
-                var where = r.dest_host || (r.url || '').split('?')[0] || '-';
-                return '<tr><td class="mono nowrap">' + esc(r.ref) + (r.resolved ? ' <span class="badge ok plain">Resolved</span>' : '') + '</td>' +
-                    '<td>' + sevBadge(r) + '<div class="cell-sub">' + esc(r.source) + '</div></td>' +
-                    '<td class="small">' + esc(where.slice(0, 60)) + '</td><td>' + esc(r.username || '-') + '</td>' +
-                    '<td class="small"><div class="truncate maxw" title="' + esc(r.message) + '">' + esc(r.message) + '</div></td>' +
-                    '<td>' + time(r.last_seen_at) + (r.occurrences > 1 || r.group_count > 1 ? '<div class="cell-sub">' + (r.occurrences > 1 ? '×' + r.occurrences + ' ' : '') + (r.group_count > 1 ? r.group_count + ' similar' : '') + '</div>' : '') + '</td>' +
-                    '<td class="actions"><button type="button" class="small" data-view="' + esc(r.ref) + '">View</button></td></tr>';
-            }), errorFilter.status === 'open' ? 'No open errors' : 'Nothing found') + '</section>';
-        on('[data-filter]', 'click', function (b) { errorFilter.status = b.getAttribute('data-filter'); errorsView(); });
+            '</div><div id="error-list"></div></section>';
+        function loadList() {
+            lazyTable({
+                mount: P.$('#error-list'),
+                url: '/api/admin/errors?status=' + errorFilter.status + '&q=' + encodeURIComponent(errorFilter.q),
+                key: function (r) { return r.ref; },
+                headers: [{ label: 'Reference' }, { label: 'What' }, { label: 'Where' }, { label: 'User' }, { label: 'Message' }, { label: 'Last seen' }, { label: '' }],
+                row: function (r) {
+                    var where = r.dest_host || (r.url || '').split('?')[0] || '-';
+                    return '<tr><td class="mono nowrap">' + esc(r.ref) + (r.resolved ? ' <span class="badge ok plain">Resolved</span>' : '') + '</td>' +
+                        '<td>' + sevBadge(r) + '<div class="cell-sub">' + esc(r.source) + '</div></td>' +
+                        '<td class="small">' + esc(where.slice(0, 60)) + '</td><td>' + esc(r.username || '-') + '</td>' +
+                        '<td class="small"><div class="truncate maxw" title="' + esc(r.message) + '">' + esc(r.message) + '</div></td>' +
+                        '<td>' + time(r.last_seen_at) + (r.occurrences > 1 || r.group_count > 1 ? '<div class="cell-sub">' + (r.occurrences > 1 ? '×' + r.occurrences + ' ' : '') + (r.group_count > 1 ? r.group_count + ' similar' : '') + '</div>' : '') + '</td>' +
+                        '<td class="actions"><button type="button" class="small" data-view="' + esc(r.ref) + '">View</button></td></tr>';
+                },
+                empty: errorFilter.status === 'open' && !errorFilter.q ? 'No open errors' : 'Nothing found',
+                summary: function (m) {
+                    return summaryBar([['Reports', int(m.total)], errorFilter.status !== 'open' ? ['Open', int(m.open), m.open ? 'bad' : ''] : null, ['Errors', int(m.errors), m.errors ? 'bad' : ''], ['Warnings', int(m.warnings), m.warnings ? 'warn' : ''], ['Distinct problems', int(m.problems)], ['Occurrences', int(m.occurrences)], ['Users affected', int(m.users)]]);
+                },
+                onFirst: function (res) { setCount('#error-count', res.summary.openAll); },
+                actions: { 'data-view': function (btn, value) { showErrorReport(value); } }
+            });
+        }
+        loadList();
+        on('[data-filter]', 'click', function (b) {
+            errorFilter.status = b.getAttribute('data-filter');
+            P.$all('[data-filter]').forEach(function (x) { var a = x === b; x.classList.toggle('active', a); x.setAttribute('aria-pressed', String(a)); });
+            loadList();
+        });
         var q = P.$('#error-q');
         var timer;
         q.addEventListener('input', function () {
             clearTimeout(timer);
-            timer = setTimeout(function () { errorFilter.q = q.value.trim(); errorsView().then(function () { var n = P.$('#error-q'); n.focus(); n.setSelectionRange(n.value.length, n.value.length); }); }, 350);
+            timer = setTimeout(function () { errorFilter.q = q.value.trim(); loadList(); }, 300);
         });
-        on('[data-view]', 'click', function (btn) { showErrorReport(btn.getAttribute('data-view')); });
+        return Promise.resolve();
     }
 
     function describeCrumb(c) {
@@ -830,17 +1052,33 @@
     }
 
     // ========================================================= activity log ==
+    var logFilter = { type: '' };
     async function logsView() {
-        var results = await Promise.all([P.api('GET', '/api/admin/usage?days=7'), P.api('GET', '/api/admin/events?limit=300')]);
-        var usage = results[0];
-        var events = results[1];
+        var usage = await P.api('GET', '/api/admin/usage?days=7');
+        var types = Object.keys(EVENT_LABELS).map(function (k) { return [k, EVENT_LABELS[k]]; }).sort(function (a, b) { return a[1].localeCompare(b[1]); });
         view.innerHTML = pageHead('Activity log', 'Sign-ins, sessions, approvals, blocked sites, proxy changes, process restarts and admin actions.', '<a class="btn" href="/api/admin/events.csv" download>Export CSV</a>') +
             '<div class="grid main-side">' +
-            panel('Events <span class="muted">(latest ' + events.length + ')</span>', eventsTable(events)) +
+            '<section class="panel"><div class="panel-head"><h2>Events</h2></div><div class="toolbar">' + selectHtml('etype', 'Event', logFilter.type, [['', 'All events']].concat(types)) + '</div><div id="event-list"></div></section>' +
             panel('Usage per user, 7 days', table([{ label: 'User' }, { label: 'Requests', num: true }, { label: 'Traffic', num: true }], usage.users.map(function (u) {
-                return '<tr><td>' + esc(u.username) + '</td><td class="num">' + u.requests + '</td><td class="num">' + esc(P.formatBytes(u.bytes)) + '</td></tr>';
+                return '<tr><td>' + esc(u.username) + '</td><td class="num">' + int(u.requests) + '</td><td class="num">' + esc(P.formatBytes(u.bytes)) + '</td></tr>';
             }), 'No usage yet')) +
             '</div>';
+        function loadList() {
+            lazyTable({
+                mount: P.$('#event-list'),
+                url: '/api/admin/events' + (logFilter.type ? '?type=' + encodeURIComponent(logFilter.type) : ''),
+                headers: [{ label: 'Time' }, { label: 'Event' }, { label: 'User' }, { label: 'Details' }, { label: 'IP' }],
+                row: function (e) {
+                    return '<tr><td>' + time(e.created_at) + '</td><td>' + eventBadge(e.type) + '</td><td>' + esc(e.username || '-') + '</td><td class="small">' + esc(e.detail || '') + '</td><td class="mono subtle">' + esc(e.ip || '') + '</td></tr>';
+                },
+                empty: 'No activity yet',
+                summary: function (m) {
+                    return summaryBar([['Events', int(m.total)], ['Users', int(m.users)]].concat(logFilter.type ? [] : m.types.slice(0, 4).map(function (t) { return [eventLabel(t.type), int(t.n)]; })));
+                }
+            });
+        }
+        loadList();
+        P.$('#etype').addEventListener('change', function (e) { logFilter.type = e.target.value; loadList(); });
     }
 
     // ============================================================= settings ==

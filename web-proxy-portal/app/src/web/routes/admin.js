@@ -78,7 +78,27 @@ router.get(
 );
 
 // --------------------------------------------------------------- users ----
-router.get('/users', h(() => users.list()));
+
+/**
+ * Lazy-loading helper. With ?paged=1 a list endpoint answers
+ *   { items, nextCursor, summary }   (summary only on the first batch)
+ * Without it the old plain-array answer is kept (CSV, pickers, scripts).
+ */
+const isPaged = (req) => req.query.paged === '1' || req.query.paged === 'true';
+function paged(req, pageFn, summaryFn) {
+    const opts = { cursor: req.query.cursor || null, limit: req.query.limit };
+    const result = pageFn(opts);
+    if (!opts.cursor && summaryFn) result.summary = summaryFn();
+    return result;
+}
+router.get(
+    '/users',
+    h((req) => {
+        if (!isPaged(req)) return users.list();
+        const f = { q: req.query.q || '', pending: req.query.pending === '1' };
+        return paged(req, (o) => users.page(f, o), () => users.pageSummary({ q: f.q }));
+    })
+);
 router.post(
     '/users',
     h((req) => {
@@ -164,7 +184,15 @@ router.delete(
         audit(req, 'admin_pool_deleted', String(id(req)));
     })
 );
-router.get('/pools/:id/proxies', h((req) => pools.listProxies(id(req))));
+router.get(
+    '/pools/:id/proxies',
+    h((req) => {
+        const poolId = id(req);
+        if (!isPaged(req)) return pools.listProxies(poolId);
+        const f = { status: req.query.status || '', q: req.query.q || '' };
+        return paged(req, (o) => pools.pageProxies(poolId, f, o), () => pools.proxySummary(poolId));
+    })
+);
 router.get('/pools/:id/access', h((req) => ({ userIds: pools.getPoolAccess(id(req)) })));
 router.put(
     '/pools/:id/access',
@@ -252,7 +280,7 @@ router.put(
 );
 
 // ------------------------------------------------------ sessions & logs ----
-router.get('/sessions', h(() => sessions.listActive()));
+router.get('/sessions', h((req) => (isPaged(req) ? paged(req, (o) => sessions.pageActive(o), () => sessions.activeSummary()) : sessions.listActive())));
 router.post(
     '/sessions/:id/end',
     h((req) => {
@@ -261,7 +289,14 @@ router.post(
     })
 );
 router.get('/usage', h((req) => ({ users: usage.summary(Number(req.query.days) || 7), daily: usage.daily(Number(req.query.days) || 14) })));
-router.get('/events', h((req) => events.list({ limit: req.query.limit, type: req.query.type || null, userId: Number(req.query.userId) || null })));
+router.get(
+    '/events',
+    h((req) => {
+        const f = { type: req.query.type || null, userId: Number(req.query.userId) || null };
+        if (!isPaged(req)) return events.list({ ...f, limit: req.query.limit });
+        return paged(req, (o) => events.page(f, o), () => events.pageSummary(f));
+    })
+);
 
 // ---- exports for data analysis (Excel / pandas / jq) ----
 const csvCell = (v) => {
@@ -288,7 +323,14 @@ const reqFilter = (q) => ({
     since: q.hours ? Date.now() - Number(q.hours) * 3600000 : undefined,
     limit: q.limit
 });
-router.get('/requests', h((req) => requestLog.list(reqFilter(req.query))));
+router.get(
+    '/requests',
+    h((req) => {
+        const f = reqFilter(req.query);
+        if (!isPaged(req)) return requestLog.list(f);
+        return paged(req, (o) => requestLog.page(f, o), () => requestLog.pageSummary(f));
+    })
+);
 router.get('/requests.csv', (req, res) => {
     const rows = requestLog.list({ ...reqFilter(req.query), since: Date.now() - (Number(req.query.hours) || 24) * 3600000, limit: 100000 }).reverse();
     res.set('Content-Type', 'text/csv; charset=utf-8');
@@ -305,7 +347,11 @@ router.get(
         const s = sessions.get(req.params.id);
         if (!s) throw new Error('Session not found');
         const user = users.getById(s.user_id);
-        return { session: { ...s, username: user ? user.username : null }, requests: requestLog.sessionTimeline(s.id) };
+        const session = { ...s, username: user ? user.username : null };
+        if (!isPaged(req)) return { session, requests: requestLog.sessionTimeline(s.id) };
+        const result = paged(req, (o) => requestLog.sessionTimelinePage(s.id, o), () => requestLog.sessionTimelineSummary(s.id));
+        if (!req.query.cursor) result.session = session;
+        return result;
     })
 );
 
@@ -329,7 +375,14 @@ router.get(
 router.get('/proxies/:id/checks', h((req) => pools.proxyChecks(id(req))));
 
 // --------------------------------------------------------------- errors ----
-router.get('/errors', h((req) => ({ reports: errorReports.list({ status: req.query.status || 'open', q: req.query.q || '' }), open: errorReports.countOpen() })));
+router.get(
+    '/errors',
+    h((req) => {
+        const f = { status: req.query.status || 'open', q: req.query.q || '' };
+        if (!isPaged(req)) return { reports: errorReports.list(f), open: errorReports.countOpen() };
+        return paged(req, (o) => errorReports.page(f, o), () => ({ ...errorReports.pageSummary(f), openAll: errorReports.countOpen() }));
+    })
+);
 router.get('/errors.jsonl', (req, res) => {
     const days = Math.min(Number(req.query.days) || 7, 90);
     res.set('Content-Type', 'application/x-ndjson; charset=utf-8');

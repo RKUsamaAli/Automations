@@ -7,6 +7,7 @@
  * upstream proxy it is stuck to, and usage counters for the admin panel.
  */
 const db = require('../db');
+const paging = require('../lib/paging');
 const TtlCache = require('../lib/ttlCache');
 
 // Short TTL: the portal (another process) ends sessions by writing the DB,
@@ -68,6 +69,44 @@ function listActive(limit = 200) {
         .all(limit);
 }
 
+/** One lazy-loaded batch of active sessions, most recently used first. Cursor = (last_seen_at, id). */
+function pageActive({ cursor = null, limit } = {}) {
+    const n = paging.limitOf(limit);
+    const after = paging.decodeCursor(cursor);
+    const args = [];
+    let extra = '';
+    if (after) {
+        extra = 'AND (s.last_seen_at < ? OR (s.last_seen_at = ? AND s.id < ?))';
+        args.push(Number(after[0]), Number(after[0]), String(after[1]));
+    }
+    args.push(n + 1);
+    const rows = db
+        .get()
+        .prepare(
+            `SELECT s.*, u.username, p.name AS pool_name, x.host AS proxy_host, x.port AS proxy_port
+             FROM sessions s
+             LEFT JOIN users u ON u.id = s.user_id
+             LEFT JOIN proxy_pools p ON p.id = s.pool_id
+             LEFT JOIN proxies x ON x.id = s.proxy_id
+             WHERE s.ended_at IS NULL ${extra} ORDER BY s.last_seen_at DESC, s.id DESC LIMIT ?`
+        )
+        .all(...args);
+    return paging.toPage(rows, n, (r) => [r.last_seen_at, r.id]);
+}
+
+/** Totals over ALL active sessions. */
+function activeSummary() {
+    const r = db
+        .get()
+        .prepare(
+            `SELECT COUNT(*) AS total, COUNT(DISTINCT user_id) AS users, SUM(requests) AS requests, SUM(bytes) AS bytes,
+                    SUM(CASE WHEN end_requested = 1 THEN 1 ELSE 0 END) AS ending
+             FROM sessions WHERE ended_at IS NULL`
+        )
+        .get();
+    return { total: r.total, users: r.users, requests: r.requests || 0, bytes: r.bytes || 0, ending: r.ending || 0 };
+}
+
 function listRecent(limit = 100) {
     return db
         .get()
@@ -122,6 +161,8 @@ function pruneEnded(olderThanDays = 30) {
 }
 
 module.exports = {
+    pageActive,
+    activeSummary,
     create,
     get,
     getCached,

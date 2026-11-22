@@ -6,6 +6,7 @@
 const db = require('../db');
 const { hashPassword, verifyPassword, randomToken, sha256 } = require('../lib/crypto');
 const TtlCache = require('../lib/ttlCache');
+const paging = require('../lib/paging');
 
 const PUBLIC_FIELDS = `id, username, email, role, enabled, pending, pool_id, rate_limit_rpm, bandwidth_limit_mb_day,
     token_version, note, created_at, last_login_at,
@@ -39,6 +40,54 @@ function getForToken(id, v) {
 
 function list() {
     return db.get().prepare(`SELECT ${PUBLIC_FIELDS} FROM users ORDER BY username`).all();
+}
+
+/**
+ * One lazy-loaded batch of users (A-Z). Approved users only unless
+ * `pending` is set; `q` searches username / email.
+ */
+function page({ q = '', pending = false } = {}, { cursor = null, limit } = {}) {
+    const n = paging.limitOf(limit);
+    const where = [pending ? 'pending = 1' : 'pending = 0'];
+    const args = [];
+    if (q) {
+        const like = `%${String(q).slice(0, 100)}%`;
+        where.push('(username LIKE ? OR email LIKE ?)');
+        args.push(like, like);
+    }
+    const after = paging.decodeCursor(cursor);
+    if (after) {
+        where.push('(username COLLATE NOCASE > ? OR (username COLLATE NOCASE = ? AND id > ?))');
+        args.push(String(after[0]), String(after[0]), Number(after[1]));
+    }
+    args.push(n + 1);
+    const rows = db
+        .get()
+        .prepare(`SELECT ${PUBLIC_FIELDS} FROM users WHERE ${where.join(' AND ')} ORDER BY username COLLATE NOCASE, id LIMIT ?`)
+        .all(...args);
+    return paging.toPage(rows, n, (r) => [r.username, r.id]);
+}
+
+/** Totals over every user (the summary strip on Admin -> Users). */
+function pageSummary({ q = '' } = {}) {
+    const args = [];
+    let where = '';
+    if (q) {
+        const like = `%${String(q).slice(0, 100)}%`;
+        where = 'WHERE (username LIKE ? OR email LIKE ?)';
+        args.push(like, like);
+    }
+    const r = db
+        .get()
+        .prepare(
+            `SELECT COUNT(*) AS total, SUM(CASE WHEN pending = 0 THEN 1 ELSE 0 END) AS approved,
+                    SUM(CASE WHEN role = 'admin' THEN 1 ELSE 0 END) AS admins,
+                    SUM(CASE WHEN enabled = 0 AND pending = 0 THEN 1 ELSE 0 END) AS disabled,
+                    SUM(pending) AS pending, SUM(CASE WHEN last_login_at > ? THEN 1 ELSE 0 END) AS active7d
+             FROM users ${where}`
+        )
+        .get(Date.now() - 7 * 86400000, ...args);
+    return { total: r.total, approved: r.approved || 0, admins: r.admins || 0, disabled: r.disabled || 0, pending: r.pending || 0, active7d: r.active7d || 0 };
 }
 
 function count() {
@@ -220,6 +269,8 @@ function markLogin(id) {
 }
 
 module.exports = {
+    page,
+    pageSummary,
     getById,
     getByIdCached,
     getForToken,

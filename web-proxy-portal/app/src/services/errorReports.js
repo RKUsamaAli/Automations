@@ -14,6 +14,7 @@
  */
 const crypto = require('crypto');
 const db = require('../db');
+const paging = require('../lib/paging');
 const config = require('../config');
 const events = require('./events');
 const requestLog = require('./requestLog');
@@ -156,7 +157,7 @@ function get(refOrId) {
  * @param {'open'|'resolved'|'all'} [f.status]
  * @param {string} [f.q] search in ref / message / host / username
  */
-function list({ status = 'open', q = '', limit = 200 } = {}) {
+function errWhere({ status = 'open', q = '' } = {}) {
     const where = [];
     const args = [];
     if (status === 'open') where.push('e.resolved = 0');
@@ -166,18 +167,48 @@ function list({ status = 'open', q = '', limit = 200 } = {}) {
         const like = `%${String(q).slice(0, 100)}%`;
         args.push(like, like, like, like, like);
     }
+    return { where, args };
+}
+const ERR_COLS = `e.id, e.ref, e.created_at, e.last_seen_at, e.occurrences, e.source, e.kind, e.severity, e.fingerprint,
+    e.message, e.user_id, u.username, e.session_id, e.url, e.dest_host, e.resolved,
+    (SELECT COUNT(*) FROM error_reports g WHERE g.fingerprint = e.fingerprint) AS group_count`;
+const ERR_FROM = 'FROM error_reports e LEFT JOIN users u ON u.id = e.user_id';
+const whereSql = (w) => (w.length ? 'WHERE ' + w.join(' AND ') : '');
+
+function list({ status = 'open', q = '', limit = 200 } = {}) {
+    const { where, args } = errWhere({ status, q });
     args.push(Math.min(Number(limit) || 200, 1000));
-    return db
+    return db.get().prepare(`SELECT ${ERR_COLS} ${ERR_FROM} ${whereSql(where)} ORDER BY e.last_seen_at DESC, e.id DESC LIMIT ?`).all(...args);
+}
+
+/** One lazy-loaded batch, most recently seen first. Cursor = (last_seen_at, id). */
+function page(f = {}, { cursor = null, limit } = {}) {
+    const n = paging.limitOf(limit);
+    const { where, args } = errWhere(f);
+    const after = paging.decodeCursor(cursor);
+    if (after) {
+        where.push('(e.last_seen_at < ? OR (e.last_seen_at = ? AND e.id < ?))');
+        args.push(Number(after[0]), Number(after[0]), Number(after[1]));
+    }
+    args.push(n + 1);
+    const rows = db.get().prepare(`SELECT ${ERR_COLS} ${ERR_FROM} ${whereSql(where)} ORDER BY e.last_seen_at DESC, e.id DESC LIMIT ?`).all(...args);
+    return paging.toPage(rows, n, (r) => [r.last_seen_at, r.id]);
+}
+
+/** Totals for the whole filtered set. */
+function pageSummary(f = {}) {
+    const { where, args } = errWhere(f);
+    const r = db
         .get()
         .prepare(
-            `SELECT e.id, e.ref, e.created_at, e.last_seen_at, e.occurrences, e.source, e.kind, e.severity, e.fingerprint,
-                    e.message, e.user_id, u.username, e.session_id, e.url, e.dest_host, e.resolved,
-                    (SELECT COUNT(*) FROM error_reports g WHERE g.fingerprint = e.fingerprint) AS group_count
-             FROM error_reports e LEFT JOIN users u ON u.id = e.user_id
-             ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
-             ORDER BY e.last_seen_at DESC LIMIT ?`
+            `SELECT COUNT(*) AS total, SUM(CASE WHEN e.resolved = 0 THEN 1 ELSE 0 END) AS open,
+                    SUM(CASE WHEN e.severity = 'error' THEN 1 ELSE 0 END) AS errors,
+                    SUM(e.occurrences) AS occurrences, COUNT(DISTINCT e.user_id) AS users,
+                    COUNT(DISTINCT e.fingerprint) AS problems
+             ${ERR_FROM} ${whereSql(where)}`
         )
-        .all(...args);
+        .get(...args);
+    return { total: r.total, open: r.open || 0, errors: r.errors || 0, warnings: r.total - (r.errors || 0), occurrences: r.occurrences || 0, users: r.users, problems: r.problems };
 }
 
 function setResolved(id, resolved, byUserId, note) {
@@ -211,4 +242,4 @@ function prune(olderThanDays = 30) {
     return db.get().prepare('DELETE FROM error_reports WHERE last_seen_at < ?').run(Date.now() - olderThanDays * 86400000).changes;
 }
 
-module.exports = { report, get, list, setResolved, resolveGroup, countOpen, exportRange, prune, fingerprintOf };
+module.exports = { report, get, list, page, pageSummary, setResolved, resolveGroup, countOpen, exportRange, prune, fingerprintOf };
