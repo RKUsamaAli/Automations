@@ -308,8 +308,8 @@ test.describe.serial('full product journey', () => {
 
     test('a session shows its proxy and can be switched to another one', async () => {
         await expect(phone).toHaveURL(S.appUrl + '/');
-        // the session opened through "My proxies" shows that proxy (127.0.0.1:<port> in the test setup)
-        const ownFirst = phone.locator('#sessions li').filter({ has: phone.locator('.via-line', { hasText: 'My proxies' }) }).first();
+        // the session the toolbar moved to the shared pool shows that proxy (127.0.0.1:<port> in the test setup)
+        const ownFirst = phone.locator('#sessions li').filter({ has: phone.locator('.via-line', { hasText: pools.shared }) }).first();
         await expect(ownFirst).toBeVisible();
         // pin the row by its session id (its text changes after the switch)
         const sid = await ownFirst.locator('[data-proxy]').getAttribute('data-proxy');
@@ -320,15 +320,15 @@ test.describe.serial('full product journey', () => {
         await expect(dialog).toBeVisible();
         await expect(dialog.locator('.proxy-option').filter({ hasText: 'Current' })).toHaveCount(1);
         await shot(phone, '15c-change-proxy-iphone', { fullPage: false });
-        // pick a proxy from the shared admin pool (not the current one)
-        await dialog.locator('fieldset', { hasText: pools.shared }).locator('.proxy-option:not(.disabled)').first().click();
+        // switch it back to the user's own proxy
+        await dialog.locator('fieldset', { hasText: 'My proxies' }).locator('.proxy-option:not(.disabled)').first().click();
         await dialog.getByRole('button', { name: 'Use this proxy' }).click();
         await expect(phone.getByText(/Now using/)).toBeVisible();
-        await expect(own.locator('.via-line')).toContainText(pools.shared);
+        await expect(own.locator('.via-line')).toContainText('My proxies');
         // the next page of that session really goes out through the new upstream
         await expect(async () => {
             await phone.goto(ownProxyUrl);
-            await expect(phone.locator('#via-name')).toHaveText('Admin provider (US)', { timeout: 1000 });
+            await expect(phone.locator('#via-name')).toHaveText('Your own proxy', { timeout: 1000 });
         }).toPass({ timeout: 10000 });
         await backToPortal(phone);
     });
