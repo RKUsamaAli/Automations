@@ -18,6 +18,7 @@
 const express = require('express');
 const config = require('../../config');
 const sites = require('../../services/sites');
+const sessionProxy = require('../../services/sessionProxy');
 const search = require('../../services/search');
 const RateLimiter = require('../../lib/rateLimiter');
 const { idOrNull } = require('../../lib/ids');
@@ -161,6 +162,22 @@ function safeUrl(url) {
         return null;
     }
 }
+
+// Which proxy a session uses, and switching it (next page load uses the new one).
+router.get('/sessions/:id/proxies', (req, res) => {
+    const s = sessions.get(req.params.id);
+    if (!s || s.user_id !== req.user.id) return res.status(404).json({ error: 'Session not found' });
+    res.json({ current: s.proxy_id, pools: sessionProxy.choices(req.user, s) });
+});
+router.post('/sessions/:id/proxy', (req, res) => {
+    const s = sessions.get(req.params.id);
+    if (!s || s.user_id !== req.user.id) return res.status(404).json({ error: 'Session not found' });
+    try {
+        res.json(sessionProxy.change(s, String((req.body || {}).proxyId || ''), { user: req.user }));
+    } catch (e) {
+        res.status(400).json({ error: e.message });
+    }
+});
 
 router.delete('/sessions/:id', (req, res) => {
     const s = sessions.get(req.params.id);

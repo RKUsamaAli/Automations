@@ -391,6 +391,7 @@
         admin_proxy_enabled: 'Proxy enabled', admin_proxy_disabled: 'Proxy disabled', admin_proxy_removed: 'Proxy removed',
         admin_site_created: 'Site created', admin_site_updated: 'Site updated', admin_site_deleted: 'Site deleted',
         admin_script_created: 'Script created', admin_script_updated: 'Script updated', admin_script_deleted: 'Script deleted',
+        session_proxy_changed: 'Session proxy changed', admin_session_proxy_changed: 'Session proxy changed by admin',
         admin_error_resolved: 'Error resolved', admin_error_reopened: 'Error reopened', admin_error_group_resolved: 'Similar errors resolved',
         user_proxies_checked: 'Own proxies checked', user_proxy_enabled: 'Own proxy enabled', user_proxy_disabled: 'Own proxy disabled', user_proxy_removed: 'Own proxy removed',
         cli_admin_created: 'Admin created (server)', cli_user_created: 'User created (server)', cli_password_reset: 'Password reset (server)',
@@ -823,7 +824,7 @@
                         '<td class="small"><div class="truncate maxw" title="' + esc(s.start_url || '') + '">' + esc(s.start_url || '') + '</div></td>' +
                         '<td class="small">' + esc(s.pool_name || '-') + '<div class="cell-sub mono">' + esc(s.proxy_host ? s.proxy_host + ':' + s.proxy_port : 'direct') + '</div></td>' +
                         '<td class="num">' + esc(P.formatBytes(s.bytes)) + '</td><td class="num">' + int(s.requests) + '</td><td>' + time(s.last_seen_at) + '</td>' +
-                        '<td class="actions"><button type="button" class="small" data-show="' + esc(s.id) + '">Timeline</button><button type="button" class="small danger" data-end="' + esc(s.id) + '">End</button></td></tr>';
+                        '<td class="actions"><button type="button" class="small" data-show="' + esc(s.id) + '">Timeline</button><button type="button" class="small" data-proxy="' + esc(s.id) + '">Proxy</button><button type="button" class="small danger" data-end="' + esc(s.id) + '">End</button></td></tr>';
                 },
                 empty: sessionFilter.user ? 'No active sessions for this user' : 'No active sessions',
                 summary: function (m) {
@@ -831,6 +832,7 @@
                 },
                 actions: {
                     'data-show': function (btn, value) { sessionTimeline(value); },
+                    'data-proxy': function (btn, value) { changeSessionProxy(value, loadList); },
                     'data-end': function (btn, value) {
                         confirmed('The user will need to start a new session.', async function () {
                             await P.api('POST', '/api/admin/sessions/' + encodeURIComponent(value) + '/end');
@@ -843,6 +845,35 @@
         }
         loadList();
         P.$('#reload').addEventListener('click', loadList);
+    }
+
+    /** Side panel: pick another upstream proxy for a session (any admin pool, or the owner's own proxies). */
+    async function changeSessionProxy(sessionId, after) {
+        var data = await P.api('GET', '/api/admin/sessions/' + encodeURIComponent(sessionId) + '/proxies');
+        var ms = function (v) { return v == null ? '' : v >= 1000 ? (Math.round(v / 100) / 10) + ' s' : v + ' ms'; };
+        var body = '<p class="muted small">The session\'s next page load goes out through the selected proxy (within ~2 seconds). Cookies stay.</p>' +
+            (data.pools.length ? data.pools.map(function (pool) {
+                return '<fieldset class="proxy-group"><legend>' + esc(pool.name) + '</legend>' + pool.proxies.map(function (x) {
+                    var state = !x.enabled ? 'Disabled' : x.status === 'dead' ? 'Offline' : x.status === 'slow' ? 'Slow' : x.status === 'healthy' ? 'Online' : 'Not checked';
+                    var tone = !x.usable ? 'bad' : x.status === 'slow' ? 'warn' : x.status === 'healthy' ? 'ok' : '';
+                    return '<label class="proxy-option' + (x.usable ? '' : ' disabled') + '"><input type="radio" name="sp" value="' + esc(x.id) + '"' + (x.current ? ' checked' : '') + (x.usable ? '' : ' disabled') + '>' +
+                        '<span class="grow"><span class="mono">' + esc(x.label) + '</span>' + (x.current ? ' <span class="badge accent plain">Current</span>' : '') +
+                        '<span class="meta"><span class="dot ' + tone + '"></span>' + state + (x.latency_ms != null ? ' · ' + ms(x.latency_ms) : '') + (x.active_sessions ? ' · ' + x.active_sessions + ' active' : '') + '</span></span></label>';
+                }).join('') + '</fieldset>';
+            }).join('') : '<p class="muted">No proxies available.</p>');
+        showPanel('Change proxy', body, '<button type="button" id="sp-cancel">Cancel</button><button type="button" class="primary" id="sp-go">Use this proxy</button>');
+        P.$('#sp-cancel').addEventListener('click', closeModal);
+        P.$('#sp-go').addEventListener('click', async function () {
+            var picked = P.$('#modal-body input[name=sp]:checked');
+            if (!picked) return P.showError(modalError, 'Pick a proxy');
+            var done = P.busy(P.$('#sp-go'), 'Switching');
+            try {
+                var r = await P.api('POST', '/api/admin/sessions/' + encodeURIComponent(sessionId) + '/proxy', { proxyId: picked.value });
+                closeModal();
+                P.toast(r.changed ? 'Session now uses ' + r.proxy : 'Already using that proxy');
+                if (after) after();
+            } catch (err) { done(); P.showError(modalError, err.message); }
+        });
     }
 
     /** Side panel with every page one session loaded, newest first, loaded while scrolling the panel. */

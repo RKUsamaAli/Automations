@@ -504,3 +504,52 @@ test('rate limiting: too many API calls -> 429 with Retry-After', async () => {
         delete process.env.API_RATE_LIMIT_ANON_RPM;
     }
 });
+
+test('session proxy: user sees and switches the proxy of their own session; rules enforced; logged', async () => {
+    const users = require('../src/services/users');
+    const pools = require('../src/services/pools');
+    const sessions = require('../src/services/sessions');
+    const db = require('../src/db');
+    const u1 = users.getById(db.get().prepare("SELECT id FROM users WHERE username = 'user1'").get().id);
+    const pool = pools.savePool({ name: 'Switch pool', visibility: 'all' });
+    pools.importProxies(pool.id, '198.51.100.21:8080:alice-ES-1:pw\n198.51.100.22:8080:alice-ES-2:pw\n198.51.100.23:8080', 'http');
+    const [a, b, dead] = pools.listProxies(pool.id);
+    for (const x of [a, b]) pools.recordHealth(x.id, { ok: true, latencyMs: 500, slowMs: 5000, failuresBeforeDead: 3 });
+    for (let i = 0; i < 3; i++) pools.recordHealth(dead.id, { ok: false, error: 'refused', slowMs: 5000, failuresBeforeDead: 3 });
+    const sid = 'c'.repeat(32);
+    sessions.create({ id: sid, userId: u1.id, poolId: pool.id, proxyId: a.id, startUrl: 'https://example.org/' });
+
+    const c = client();
+    await c.req('GET', '/login');
+    await c.req('POST', '/api/auth/login', { username: 'user1', password: 'userpass123' });
+    const list = await c.req('GET', '/api/portal/sessions');
+    const mine = list.json.find((s) => s.id === sid);
+    assert.equal(mine.proxy_username, 'alice-ES-1');
+    assert.equal(mine.proxy_host, '198.51.100.21');
+
+    const choices = await c.req('GET', `/api/portal/sessions/${sid}/proxies`);
+    const opts = choices.json.pools.find((p) => p.id === pool.id).proxies;
+    assert.equal(opts.find((x) => x.id === a.id).current, true);
+    assert.equal(opts.find((x) => x.id === dead.id).usable, false);
+    assert.ok(opts.every((x) => !('password' in x)), 'no passwords sent to the browser');
+
+    assert.equal((await c.req('POST', `/api/portal/sessions/${sid}/proxy`, { proxyId: dead.id })).status, 400, 'offline proxy refused');
+    const ok = await c.req('POST', `/api/portal/sessions/${sid}/proxy`, { proxyId: b.id });
+    assert.equal(ok.status, 200, JSON.stringify(ok.json));
+    assert.equal(ok.json.proxy, 'alice-ES-2 @ 198.51.100.22:8080');
+    assert.equal(sessions.get(sid).proxy_id, b.id);
+    const e = db.get().prepare("SELECT * FROM events WHERE type = 'session_proxy_changed' ORDER BY id DESC LIMIT 1").get();
+    assert.match(e.detail, /alice-ES-1 @ 198\.51\.100\.21:8080 -> alice-ES-2 @ 198\.51\.100\.22:8080/);
+    assert.equal(e.target, `session:${sid}`);
+
+    // someone else's session: not found
+    const other = client();
+    await other.req('GET', '/login');
+    await other.req('POST', '/api/auth/login', { username: 'admin1', password: 'adminpass123' });
+    assert.equal((await other.req('POST', `/api/portal/sessions/${sid}/proxy`, { proxyId: a.id })).status, 404);
+    // admin can switch it from Admin -> Sessions
+    const adm = await other.req('POST', `/api/admin/sessions/${sid}/proxy`, { proxyId: a.id });
+    assert.equal(adm.status, 200, JSON.stringify(adm.json));
+    assert.equal(sessions.get(sid).proxy_id, a.id);
+    sessions.markEnded(sid, 'test');
+});
