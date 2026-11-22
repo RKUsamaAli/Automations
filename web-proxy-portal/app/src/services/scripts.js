@@ -111,10 +111,15 @@ function portalButton(portalUrl) {
  * @param {string} pageUrl real destination URL, e.g. https://www.example.com/login
  * @param {string} host    its hostname
  * @param {object[]} [scriptsList] defaults to the enabled scripts
- * @param {{ portalUrl?: string }} [opts] portalUrl adds the "Portal" button
+ * @param {{ portalUrl?: string, toolbar?: object }} [opts] toolbar = floating toolbar config; portalUrl = simple "Portal" button
  */
 function buildBundle(pageUrl, host, scriptsList = listEnabled(), opts = {}) {
-    const prefix = opts.portalUrl ? portalButton(opts.portalUrl) : '';
+    // Floating toolbar for the session's own pages; otherwise the simple "Portal" pill.
+    const prefix = opts.toolbar
+        ? require('../proxy/toolbarClient').toolbarScript(opts.toolbar, { url: pageUrl || null, host: host || null })
+        : opts.portalUrl
+          ? portalButton(opts.portalUrl)
+          : '';
     return prefix + buildScripts(pageUrl, host, scriptsList);
 }
 

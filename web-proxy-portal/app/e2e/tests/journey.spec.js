@@ -19,6 +19,13 @@
 const { test, expect } = require('@playwright/test');
 const { state, shot, login, IPHONE, DESKTOP } = require('../support/helpers');
 
+/** Leaves a proxied page the way a user does: toolbar button -> "Back to portal". */
+async function backToPortal(page) {
+    const bar = page.locator('portal-toolbar');
+    await bar.getByRole('button', { name: /Portal toolbar/ }).click();
+    await bar.getByRole('button', { name: /Back to portal/ }).click();
+}
+
 test.describe.serial('full product journey', () => {
     const S = state();
     const user = { name: `alice${S.run}`, email: `alice${S.run}@example.com`, pass: 'Alice-pass-123', newPass: 'Alice-pass-456' };
@@ -182,7 +189,7 @@ test.describe.serial('full product journey', () => {
         expect(new URL(proxiedUrl).hostname).toBe('browse.localtest');
         await expect(phone.locator('#via-name')).toHaveText('Admin provider (US)');
         await expect(phone.locator(`#portal-ribbon-${S.run}`)).toHaveText('Injected by the portal on shop.localtest');
-        await expect(phone.locator('#__portal_home')).toBeVisible();
+        await expect(phone.locator('portal-toolbar').getByRole('button', { name: /Portal toolbar/ })).toBeVisible(); // floating toolbar
         await shot(phone, '11-proxied-site-iphone');
     });
 
@@ -196,14 +203,14 @@ test.describe.serial('full product journey', () => {
     });
 
     test('Portal button returns to the portal; session is listed and can be resumed', async () => {
-        await phone.locator('#__portal_home').click();
+        await backToPortal(phone);
         await expect(phone).toHaveURL(S.appUrl + '/');
         const session = phone.locator('#sessions li', { hasText: 'shop.localtest' });
         await expect(session).toBeVisible();
         await shot(phone, '13-sessions-iphone');
         await session.getByRole('button', { name: 'Resume' }).click();
         await expect(phone.getByText(`Signed in as ${user.name}`)).toBeVisible();
-        await phone.locator('#__portal_home').click();
+        await backToPortal(phone);
     });
 
     // ---------------------------------------------------------- own proxy --
@@ -262,13 +269,47 @@ test.describe.serial('full product journey', () => {
         await expect(phone.locator('#via-name')).toHaveText('Your own proxy');
         ownProxyUrl = phone.url();
         await shot(phone, '15-proxied-via-own-proxy-iphone');
-        await phone.locator('#__portal_home').click();
+        await backToPortal(phone);
+    });
+
+    test('floating toolbar on the website: exit IP + location, address bar, switch proxy', async () => {
+        await phone.goto(ownProxyUrl);
+        await expect(phone.locator('#via-name')).toHaveText('Your own proxy');
+        const bar = phone.locator('portal-toolbar');
+        const fab = bar.getByRole('button', { name: /Portal toolbar/ });
+        await expect(fab).toBeVisible();
+        await shot(phone, '15d-toolbar-button-iphone', { fullPage: false });
+        await fab.click();
+        const panel = bar.getByRole('dialog', { name: 'Portal toolbar' });
+        await expect(panel).toBeVisible();
+        // connection: check the exit IP through the session's proxy
+        await panel.getByRole('button', { name: 'Check' }).click();
+        await expect(panel).toContainText('203.0.113.20');
+        await expect(panel).toContainText('Madrid, Spain');
+        await expect(panel).toContainText('Demo Telecom ES');
+        // more than one proxy -> the switch list is shown
+        await expect(panel.getByText('Switch proxy')).toBeVisible();
+        await shot(phone, '15e-toolbar-panel-iphone', { fullPage: false });
+        // address bar: words -> search results in THIS session (custom engine = fake shop)
+        await panel.getByRole('searchbox', { name: 'Search or type a web address' }).fill('fresh berries');
+        await panel.getByRole('button', { name: 'Go' }).click();
+        await expect(phone.locator('#search-title')).toHaveText('Results for "fresh berries"');
+        await expect(phone.locator('#via-name')).toHaveText('Your own proxy');
+        // switch to a proxy of the shared pool from the toolbar -> page reloads through it
+        await bar.getByRole('button', { name: /Portal toolbar/ }).click();
+        const target = phone.locator('portal-toolbar').getByRole('option').filter({ hasText: pools.shared }).first();
+        await target.click();
+        await expect(phone.locator('#via-name')).toHaveText('Admin provider (US)', { timeout: 15000 });
+        await phone.locator('portal-toolbar').getByRole('button', { name: /Portal toolbar/ }).click();
+        await expect(phone.locator('portal-toolbar').getByRole('dialog')).toContainText('New York, United States');
+        await shot(phone, '15f-toolbar-after-switch-iphone', { fullPage: false });
+        await phone.goto(S.appUrl + '/');
     });
 
     test('a session shows its proxy and can be switched to another one', async () => {
         await expect(phone).toHaveURL(S.appUrl + '/');
-        // the session opened through "My proxies" shows that proxy (127.0.0.1:<port> in the test setup)
-        const ownFirst = phone.locator('#sessions li').filter({ has: phone.locator('.via-line', { hasText: 'My proxies' }) }).first();
+        // the session the toolbar moved to the shared pool shows that proxy (127.0.0.1:<port> in the test setup)
+        const ownFirst = phone.locator('#sessions li').filter({ has: phone.locator('.via-line', { hasText: pools.shared }) }).first();
         await expect(ownFirst).toBeVisible();
         // pin the row by its session id (its text changes after the switch)
         const sid = await ownFirst.locator('[data-proxy]').getAttribute('data-proxy');
@@ -279,17 +320,17 @@ test.describe.serial('full product journey', () => {
         await expect(dialog).toBeVisible();
         await expect(dialog.locator('.proxy-option').filter({ hasText: 'Current' })).toHaveCount(1);
         await shot(phone, '15c-change-proxy-iphone', { fullPage: false });
-        // pick a proxy from the shared admin pool (not the current one)
-        await dialog.locator('fieldset', { hasText: pools.shared }).locator('.proxy-option:not(.disabled)').first().click();
+        // switch it back to the user's own proxy
+        await dialog.locator('fieldset', { hasText: 'My proxies' }).locator('.proxy-option:not(.disabled)').first().click();
         await dialog.getByRole('button', { name: 'Use this proxy' }).click();
         await expect(phone.getByText(/Now using/)).toBeVisible();
-        await expect(own.locator('.via-line')).toContainText(pools.shared);
+        await expect(own.locator('.via-line')).toContainText('My proxies');
         // the next page of that session really goes out through the new upstream
         await expect(async () => {
             await phone.goto(ownProxyUrl);
-            await expect(phone.locator('#via-name')).toHaveText('Admin provider (US)', { timeout: 1000 });
+            await expect(phone.locator('#via-name')).toHaveText('Your own proxy', { timeout: 1000 });
         }).toPass({ timeout: 10000 });
-        await phone.locator('#__portal_home').click();
+        await backToPortal(phone);
     });
 
     // ------------------------------------------------------------ cleanup --

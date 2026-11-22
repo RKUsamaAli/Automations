@@ -10,7 +10,7 @@ const { newId, idOrNull } = require('../lib/ids');
 const paging = require('../lib/paging');
 
 const PUBLIC_FIELDS = `id, username, email, role, enabled, pending, pool_id, rate_limit_rpm, bandwidth_limit_mb_day,
-    token_version, note, created_at, created_by, updated_at, updated_by, last_login_at, timezone,
+    token_version, note, created_at, created_by, updated_at, updated_by, last_login_at, timezone, toolbar_enabled,
     (password_hash IS NOT NULL) AS has_password, (access_token_hash IS NOT NULL) AS has_token`;
 
 // Short cache used by the proxy engine on every request.
@@ -95,6 +95,13 @@ function pageSummary({ q = '' } = {}) {
  * Remembers the user's browser time zone (sent as X-Timezone). Only writes
  * when it changed, so normal requests cost nothing.
  */
+/** Floating toolbar on proxied pages on/off for one user (Account page / toolbar menu). */
+function setToolbar(id, enabled) {
+    db.get().prepare(`UPDATE users SET toolbar_enabled = ?, ${db.TOUCH} WHERE id = ?`).run(enabled ? 1 : 0, ...db.touch(), id);
+    cache.delete(id);
+    return getById(id);
+}
+
 function setTimezone(id, tz) {
     const changed = db.get().prepare(`UPDATE users SET timezone = ?, ${db.TOUCH} WHERE id = ? AND timezone IS NOT ?`).run(tz, ...db.touch(), id, tz).changes;
     if (changed) cache.delete(id);
@@ -277,6 +284,7 @@ function markLogin(id) {
 }
 
 module.exports = {
+    setToolbar,
     setTimezone,
     page,
     pageSummary,

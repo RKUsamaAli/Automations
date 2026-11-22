@@ -510,6 +510,12 @@ case "$MODE" in
         setup_nginx_ssl
         setup_pm2_and_cron
         install_scripts
+        # Re-run on a server that already runs the app: pick up .env changes
+        # (e.g. PUBLIC_PROTOCOL=https after switching on Let's Encrypt).
+        if [[ -L "$CURRENT_LINK" ]]; then
+            log "Restarting the app so it picks up configuration changes"
+            pm2_reload "$(current_release)" || true
+        fi
         summary
         ;;
 esac

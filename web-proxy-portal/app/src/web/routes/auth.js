@@ -53,7 +53,7 @@ function sessionInfo(access, method) {
 }
 
 function publicUser(u) {
-    return { id: u.id, username: u.username, email: u.email, role: u.role, createdAt: u.created_at, lastLoginAt: u.last_login_at };
+    return { id: u.id, username: u.username, email: u.email, role: u.role, createdAt: u.created_at, lastLoginAt: u.last_login_at, toolbarEnabled: u.toolbar_enabled !== 0 };
 }
 
 // ------------------------------------------------------------- register ----

@@ -209,7 +209,8 @@ function deletePool(id) {
 
 // -------------------------------------------------------------- proxies ----
 const PROXY_PUBLIC = `id, pool_id, protocol, host, port, username, (password IS NOT NULL) AS has_password,
-    enabled, status, latency_ms, fail_count, last_checked_at, last_error, created_at, created_by, updated_at, updated_by`;
+    enabled, status, latency_ms, fail_count, last_checked_at, last_error, exit_ip, exit_country, exit_country_code, exit_city, exit_isp, exit_ip_checked_at,
+    created_at, created_by, updated_at, updated_by`;
 
 function listProxies(poolId) {
     return db
@@ -394,6 +395,43 @@ function pickProxy(poolId, excludeIds = []) {
     return rows[0];
 }
 
+/** Stores a proxy's exit IP and its location (from the IP-info check). */
+function recordExitIp(id, geo) {
+    db.get()
+        .prepare(
+            `UPDATE proxies SET exit_ip = ?, exit_country = ?, exit_country_code = ?, exit_city = ?, exit_isp = ?, exit_ip_checked_at = ?, updated_at = ? WHERE id = ?`
+        )
+        .run(geo.ip, geo.country || null, geo.countryCode || null, geo.city || null, geo.isp || null, Date.now(), Date.now(), id);
+    cache.delete('proxy:' + id);
+}
+
+/**
+ * 0-100 quality score per proxy from its last 20 health checks:
+ * 70 % reliability (share of successful checks) + 30 % speed (median
+ * latency, 300 ms = full marks, 3 s = none), minus 15 if the last check failed.
+ * @returns {Map<id, {score, medianMs, reliability, samples}>}
+ */
+function proxyScores(ids) {
+    const out = new Map();
+    if (!ids.length) return out;
+    const stmt = db.get().prepare('SELECT ok, latency_ms FROM proxy_checks WHERE proxy_id = ? ORDER BY id DESC LIMIT 20');
+    for (const id of ids) {
+        const rows = stmt.all(id);
+        if (!rows.length) {
+            out.set(id, { score: null, medianMs: null, reliability: null, samples: 0 });
+            continue;
+        }
+        const ok = rows.filter((r) => r.ok && r.latency_ms != null).map((r) => r.latency_ms).sort((a, b) => a - b);
+        const reliability = ok.length / rows.length;
+        const medianMs = ok.length ? (ok.length % 2 ? ok[(ok.length - 1) / 2] : Math.round((ok[ok.length / 2 - 1] + ok[ok.length / 2]) / 2)) : null;
+        const speed = medianMs == null ? 0 : Math.min(1, Math.max(0, (3000 - medianMs) / 2700));
+        let score = reliability * 70 + speed * 30;
+        if (!rows[0].ok) score -= 15;
+        out.set(id, { score: Math.round(Math.min(100, Math.max(0, score))), medianMs, reliability, samples: rows.length });
+    }
+    return out;
+}
+
 /** Last health checks of one proxy (newest first) - Admin -> proxy history. */
 function proxyChecks(proxyId, limit = 100) {
     return db.get().prepare('SELECT created_at AS ts, ok, latency_ms, error FROM proxy_checks WHERE proxy_id = ? ORDER BY id DESC LIMIT ?').all(proxyId, limit);
@@ -405,6 +443,8 @@ function isUsable(proxy) {
 
 module.exports = {
     POOL_TYPES,
+    recordExitIp,
+    proxyScores,
     pageProxies,
     proxySummary,
     listPools,

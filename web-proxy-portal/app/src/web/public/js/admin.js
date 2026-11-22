@@ -391,6 +391,7 @@
         admin_proxy_enabled: 'Proxy enabled', admin_proxy_disabled: 'Proxy disabled', admin_proxy_removed: 'Proxy removed',
         admin_site_created: 'Site created', admin_site_updated: 'Site updated', admin_site_deleted: 'Site deleted',
         admin_script_created: 'Script created', admin_script_updated: 'Script updated', admin_script_deleted: 'Script deleted',
+        toolbar_enabled: 'Toolbar turned on', toolbar_disabled: 'Toolbar turned off',
         session_proxy_changed: 'Session proxy changed', admin_session_proxy_changed: 'Session proxy changed by admin',
         admin_error_resolved: 'Error resolved', admin_error_reopened: 'Error reopened', admin_error_group_resolved: 'Similar errors resolved',
         user_proxies_checked: 'Own proxies checked', user_proxy_enabled: 'Own proxy enabled', user_proxy_disabled: 'Own proxy disabled', user_proxy_removed: 'Own proxy removed',
@@ -1326,7 +1327,7 @@
             ['Portal', [
                 { name: 'portal_title', label: 'Portal name', value: s.portal_title },
                 { name: 'portal_notice', label: 'Notice on the Browse page', value: s.portal_notice, hint: 'Optional message shown to every user.' },
-                { name: 'show_portal_button', label: 'Show a "Portal" button on proxied pages (the way back on phones)', type: 'checkbox', value: s.show_portal_button }
+                { name: 'show_portal_button', label: 'Show the floating toolbar on proxied pages (address bar, exit IP, switch proxy, way back to the portal)', type: 'checkbox', value: s.show_portal_button, hint: 'Users can also hide it for themselves on their Account page.' }
             ]],
             ['Accounts', [
                 { name: 'registration_mode', label: 'Sign-up', type: 'select', value: s.registration_mode, options: [{ value: 'approval', label: 'Open, I approve each new account (recommended)' }, { value: 'open', label: 'Open, new accounts can browse immediately' }, { value: 'closed', label: 'Closed, only admins create accounts' }] },
@@ -1347,7 +1348,7 @@
                 { name: 'allowlist_strict', label: 'Also block images and scripts from other domains (may break sites using CDNs)', type: 'checkbox', value: s.allowlist_strict }
             ]],
             ['Search', [
-                { name: 'search_engine', label: 'Search engine for the address bar', type: 'select', value: s.search_engine, options: [{ value: 'google', label: 'Google' }, { value: 'duckduckgo', label: 'DuckDuckGo' }, { value: 'bing', label: 'Bing' }, { value: 'custom', label: 'Custom (URLs below)' }],
+                { name: 'search_engine', label: 'Search engine for the address bar', type: 'select', value: s.search_engine, options: [{ value: 'duckduckgo', label: 'DuckDuckGo (recommended, works through the proxy)' }, { value: 'bing', label: 'Bing' }, { value: 'google', label: 'Google (its search blocks proxied pages)' }, { value: 'custom', label: 'Custom (URLs below)' }],
                     hint: 'Words typed in the Browse address bar open this engine\'s results through the proxy. With the allowlist on, add the engine\'s domain to the extra allowed domains.' },
                 { name: 'search_suggestions', label: 'Suggest search terms while typing (asks the search engine)', type: 'checkbox', value: s.search_suggestions },
                 { name: 'search_url_custom', label: 'Custom results URL', value: s.search_url_custom, hint: '{q} is replaced by the words, e.g. https://search.example.com/?q={q}' },
