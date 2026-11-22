@@ -17,12 +17,15 @@
  * Run:  node src/web/server.js   (PM2 app "portal-web", see ecosystem.config.js)
  */
 const path = require('path');
+const fs = require('fs');
+const crypto = require('crypto');
 const express = require('express');
 const config = require('../config');
 const db = require('../db');
 const log = require('../lib/logger')('web');
 const { securityHeaders, cookies, csrf } = require('./middleware/security');
 const { timezone } = require('./middleware/timezone');
+const { apiRateLimit } = require('./middleware/rateLimit');
 const { loadUser, requireUser, requireAdmin } = require('./middleware/auth');
 const { requestId, recordTrail, errorHandler } = require('./middleware/observability');
 const metrics = require('../services/metrics');
@@ -42,6 +45,20 @@ db.assertMigrated();
 const app = express();
 const PUBLIC = path.join(__dirname, 'public');
 
+/** Short hash of every css/js file: changes whenever any of them changes. */
+function assetVersion() {
+    const h = crypto.createHash('sha1');
+    const walk = (dir) => {
+        for (const f of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+            const p = path.join(dir, f.name);
+            if (f.isDirectory()) walk(p);
+            else if (/\.(css|js|svg|png|ico|woff2?)$/.test(f.name)) h.update(f.name).update(fs.readFileSync(p));
+        }
+    };
+    walk(PUBLIC);
+    return h.digest('hex').slice(0, 8);
+}
+
 app.disable('x-powered-by');
 // nginx on 127.0.0.1 sets X-Forwarded-For; trust only the loopback hop.
 if (config.trustProxy) app.set('trust proxy', 'loopback');
@@ -59,7 +76,18 @@ app.get('/healthz', (_req, res) => {
 app.use(requestId);
 app.use(securityHeaders);
 // Static assets (css/js) first: they need no cookies, user or database work.
-app.use('/assets', express.static(PUBLIC, { index: false, maxAge: config.isProduction ? '1h' : 0 }));
+// Pages reference them as /assets/v-<content hash>/..., cached for a year
+// ("immutable"); any change to a file changes the hash, so a deploy is picked
+// up immediately. Un-versioned /assets/... URLs still work (short cache).
+const ASSET_VERSION = assetVersion();
+const staticFiles = express.static(PUBLIC, { index: false, maxAge: config.isProduction ? '5m' : 0 });
+const versionedFiles = express.static(PUBLIC, { index: false, maxAge: '365d', immutable: true });
+app.use('/assets', (req, res, next) => {
+    const m = /^\/v-[0-9a-f]{8}(\/.*)$/.exec(req.url);
+    if (!m) return staticFiles(req, res, next);
+    req.url = m[1];
+    return versionedFiles(req, res, next);
+});
 app.use(express.json({ limit: '1mb' }));
 app.use(cookies);
 app.use(csrf);
@@ -71,6 +99,7 @@ app.use((req, res, next) => {
     context.run({ userId: req.user ? req.user.id : null, requestId: req.id, ip: req.ip, source: 'web', clientId: clientDevices.fromRequest(req) }, next);
 });
 app.use(recordTrail);
+app.use(apiRateLimit); // after recordTrail so refused calls are visible in the request log
 
 // ---- API ----
 app.use('/api/auth', require('./routes/auth'));
@@ -80,7 +109,17 @@ app.use('/api/admin', requireAdmin, require('./routes/admin'));
 app.use('/api', (_req, res) => res.status(404).json({ error: 'Not found' }));
 
 // ---- Pages ----
-const page = (file) => (_req, res) => res.set('Cache-Control', 'no-store').sendFile(path.join(PUBLIC, file));
+// Read once per process and kept in memory, with asset URLs versioned.
+const pageCache = new Map();
+function pageHtml(file) {
+    let html = pageCache.get(file);
+    if (!html) {
+        html = fs.readFileSync(path.join(PUBLIC, file), 'utf8').replace(/(["'])\/assets\//g, `$1/assets/v-${ASSET_VERSION}/`);
+        if (config.isProduction) pageCache.set(file, html);
+    }
+    return html;
+}
+const page = (file) => (_req, res) => res.set('Cache-Control', 'no-store').type('html').send(pageHtml(file));
 app.get('/login', (req, res, next) => (req.user ? res.redirect('/') : page('login.html')(req, res, next)));
 app.get('/register', (req, res, next) => (req.user ? res.redirect('/') : page('register.html')(req, res, next)));
 app.get('/logout', (_req, res) => res.redirect('/account')); // signing out is a POST (CSRF-safe)
@@ -101,6 +140,10 @@ const server = app.listen(config.web.port, config.web.host, () => {
     // Tell PM2 we are ready (used with wait_ready for zero-downtime reloads).
     if (process.send) process.send('ready');
 });
+// Keep idle connections from nginx open longer than nginx's own keepalive
+// (60 s), so nginx never reuses a socket Node.js just closed (-> random 502s).
+server.keepAliveTimeout = 65000;
+server.headersTimeout = 66000;
 
 // Graceful shutdown: finish in-flight requests, then exit (PM2 sends SIGINT).
 function shutdown(signal) {

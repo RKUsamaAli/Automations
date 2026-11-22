@@ -36,6 +36,7 @@ const clientDevices = require('../../services/clientDevices');
 const tzlib = require('../../lib/timezone');
 const { isId, idOrNull } = require('../../lib/ids');
 const { diff, describe } = require('../../lib/audit');
+const TtlCache = require('../../lib/ttlCache');
 const requestLog = require('../../services/requestLog');
 const metrics = require('../../services/metrics');
 const { isBug } = require('../../lib/errors');
@@ -78,26 +79,30 @@ const SITE_FIELDS = ['name', 'start_url', 'domains', 'pool_id', 'enabled', 'show
 const SCRIPT_FIELDS = ['name', 'domains', 'run_at', 'load_order', 'enabled', 'code'];
 
 // ------------------------------------------------------------ overview ----
+// Heavy aggregates (dashboard, server health) are cached for a few seconds:
+// several admins / quick tab switches reuse the same result.
+const microCache = new TtlCache(5000, 200);
 router.get(
     '/overview',
-    h((req) => {
-        const poolList = pools.listPools();
-        return {
-            release: config.releaseName,
-            timezone: req.tz, // "today" below = since local midnight in this zone
-            sessions: sessions.stats(req.tz),
-            users: users.count(),
-            pendingUsers: users.countPending(),
-            openErrors: errorReports.countOpen(),
-            pools: poolList.length,
-            proxies: poolList.reduce((a, p) => a + p.proxy_count, 0),
-            usableProxies: poolList.reduce((a, p) => a + p.usable_count, 0),
-            usageToday: usage.today(req.tz),
-            daily: usage.daily(14, req.tz),
-            recentEvents: events.list({ limit: 15 })
-        };
-    })
+    h((req) => microCache.get(`overview|${req.tz}`, () => overview(req)))
 );
+function overview(req) {
+    const poolList = pools.listPools();
+    return {
+        release: config.releaseName,
+        timezone: req.tz, // "today" below = since local midnight in this zone
+        sessions: sessions.stats(req.tz),
+        users: users.count(),
+        pendingUsers: users.countPending(),
+        openErrors: errorReports.countOpen(),
+        pools: poolList.length,
+        proxies: poolList.reduce((a, p) => a + p.proxy_count, 0),
+        usableProxies: poolList.reduce((a, p) => a + p.usable_count, 0),
+        usageToday: usage.today(req.tz),
+        daily: usage.daily(14, req.tz),
+        recentEvents: events.list({ limit: 15 })
+    };
+}
 
 // --------------------------------------------------------------- users ----
 
@@ -548,20 +553,21 @@ router.get(
 // --------------------------------------------------------------- server ----
 router.get(
     '/server',
-    h((req) => {
-        const hours = Math.min(Number(req.query.hours) || 24, 24 * 14);
-        const series = metrics.series(hours);
-        const latest = {};
-        for (const m of series) latest[m.process] = m; // last row per process
-        return {
-            hours,
-            series,
-            processes: Object.values(latest).sort((a, b) => a.process.localeCompare(b.process)),
-            lifecycle: events.list({ limit: 300 }).filter((e) => e.type.startsWith('process_')).slice(0, 30),
-            traffic: requestLog.summary(Math.min(hours, 72))
-        };
-    })
+    h((req) => microCache.get(`server|${req.query.hours || ''}`, () => serverHealth(req)))
 );
+function serverHealth(req) {
+    const hours = Math.min(Number(req.query.hours) || 24, 24 * 14);
+    const series = metrics.series(hours);
+    const latest = {};
+    for (const m of series) latest[m.process] = m; // last row per process
+    return {
+        hours,
+        series,
+        processes: Object.values(latest).sort((a, b) => a.process.localeCompare(b.process)),
+        lifecycle: events.list({ limit: 300 }).filter((e) => e.type.startsWith('process_')).slice(0, 30),
+        traffic: requestLog.summary(Math.min(hours, 72))
+    };
+}
 router.get('/proxies/:id/checks', h((req) => pools.proxyChecks(id(req))));
 
 // --------------------------------------------------------------- errors ----

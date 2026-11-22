@@ -29,6 +29,14 @@ class RateLimiter {
         return w.count <= limit;
     }
 
+    /** { limit, remaining, resetSec } for RateLimit-* response headers. */
+    state(key, limit) {
+        const w = this.windows.get(key);
+        const now = Date.now();
+        if (!w || w.reset <= now) return { limit, remaining: limit, resetSec: Math.ceil(this.windowMs / 1000) };
+        return { limit, remaining: Math.max(0, limit - w.count), resetSec: Math.max(1, Math.ceil((w.reset - now) / 1000)) };
+    }
+
     /** Seconds until the window for `key` resets. */
     retryAfter(key) {
         const w = this.windows.get(key);

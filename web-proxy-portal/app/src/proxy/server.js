@@ -175,6 +175,11 @@ if (!useWorkers) {
             return (sessionId || ' ').split('').map((c) => c.charCodeAt(0));
         }
     };
+    // Longer than nginx's upstream keepalive (60 s): avoids 502s on reused sockets.
+    for (const srv of [proxyServer.server1, proxyServer.server2]) {
+        srv.keepAliveTimeout = 65000;
+        srv.headersTimeout = 66000;
+    }
     const closers = [
         sticky.listen(proxyServer.server1, config.proxy.port, config.proxy.host, stickyOptions),
         sticky.listen(proxyServer.server2, config.proxy.crossDomainPort, config.proxy.host, stickyOptions)

@@ -21,10 +21,17 @@ limit_conn_status 429;
 log_format pp_main '$remote_addr [$time_local] "$request" $status $body_bytes_sent '
                    'rt=$request_time host=$host rid=$request_id "$http_user_agent"';
 
+# WebSocket upgrade when asked for; otherwise an empty Connection header so the
+# connection to Node.js is kept alive and reused (upstream keepalive below).
 map $http_upgrade $pp_connection_upgrade {
     default upgrade;
-    ''      close;
+    ''      '';
 }
+
+# ---- Node.js processes, with a pool of reused (keep-alive) connections -------
+upstream pp_web          { server 127.0.0.1:{{WEB_PORT}};         keepalive 32; }
+upstream pp_proxy_main   { server 127.0.0.1:{{PROXY_PORT}};       keepalive 64; }
+upstream pp_proxy_cross  { server 127.0.0.1:{{PROXY_CROSS_PORT}}; keepalive 16; }
 
 # If you put Cloudflare (orange cloud) in front, uncomment so logs and rate
 # limits see the real visitor IP (full list: https://www.cloudflare.com/ips/):
@@ -53,6 +60,7 @@ server {
     ssl_certificate     {{SSL_CERT}};
     ssl_certificate_key {{SSL_KEY}};
     include /etc/nginx/snippets/proxy-portal-ssl.conf;
+    include /etc/nginx/snippets/proxy-portal-gzip.conf;
 
     add_header Strict-Transport-Security "max-age=31536000" always;
     client_max_body_size 2m;
@@ -62,12 +70,12 @@ server {
     location = /api/auth/login {
         limit_req zone=pp_login burst=5 nodelay;
         include /etc/nginx/snippets/proxy-portal-upstream.conf;
-        proxy_pass http://127.0.0.1:{{WEB_PORT}};
+        proxy_pass http://pp_web;
     }
     location / {
         limit_req zone=pp_api burst=60 nodelay;
         include /etc/nginx/snippets/proxy-portal-upstream.conf;
-        proxy_pass http://127.0.0.1:{{WEB_PORT}};
+        proxy_pass http://pp_web;
     }
 }
 
@@ -80,6 +88,7 @@ server {
     ssl_certificate     {{SSL_CERT}};
     ssl_certificate_key {{SSL_KEY}};
     include /etc/nginx/snippets/proxy-portal-ssl.conf;
+    include /etc/nginx/snippets/proxy-portal-gzip.conf;
 
     client_max_body_size 100m;       # uploads on proxied sites
     access_log /var/log/nginx/proxy-portal-proxy.access.log pp_main;
@@ -89,7 +98,7 @@ server {
         limit_req  zone=pp_proxy burst=400 nodelay;
         limit_conn pp_conn 200;
         include /etc/nginx/snippets/proxy-portal-upstream.conf;
-        proxy_pass http://127.0.0.1:{{PROXY_PORT}};
+        proxy_pass http://pp_proxy_main;
     }
 }
 
@@ -102,6 +111,7 @@ server {
     ssl_certificate     {{SSL_CERT}};
     ssl_certificate_key {{SSL_KEY}};
     include /etc/nginx/snippets/proxy-portal-ssl.conf;
+    include /etc/nginx/snippets/proxy-portal-gzip.conf;
 
     client_max_body_size 100m;
     access_log /var/log/nginx/proxy-portal-proxy.access.log pp_main;
@@ -111,6 +121,6 @@ server {
         limit_req  zone=pp_proxy burst=400 nodelay;
         limit_conn pp_conn 200;
         include /etc/nginx/snippets/proxy-portal-upstream.conf;
-        proxy_pass http://127.0.0.1:{{PROXY_CROSS_PORT}};
+        proxy_pass http://pp_proxy_cross;
     }
 }

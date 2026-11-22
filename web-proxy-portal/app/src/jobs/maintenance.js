@@ -26,6 +26,8 @@ function run() {
     const usageRows = usage.prune(180);
     const deviceRows = clientDevices.prune(180);
     const logFiles = require('../lib/logger').pruneFiles();
+    // Keep SQLite's query planner statistics fresh (cheap; only analyses what changed).
+    db.get().pragma('optimize');
     if (ticketRows + eventRows + sessionRows + usageRows + errorRows + requestRows + metricRows + checkRows + deviceRows + logFiles) {
         log.info('pruned old rows', { tickets: ticketRows, events: eventRows, sessions: sessionRows, usage: usageRows, errorReports: errorRows, requests: requestRows, metrics: metricRows, proxyChecks: checkRows, devices: deviceRows, logFiles });
     }

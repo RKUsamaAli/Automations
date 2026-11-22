@@ -476,3 +476,31 @@ test('browse: words open the search engine results page through the proxy', asyn
     assert.equal(s.json.kind, 'url');
     assert.equal(s.json.engine, 'Google');
 });
+
+test('performance: versioned assets cached for a year; API answers carry rate-limit headers', async () => {
+    const c = client();
+    const login = await c.req('GET', '/login');
+    const m = /href="(\/assets\/v-[0-9a-f]{8}\/css\/app\.css)"/.exec(login.text);
+    assert.ok(m, 'pages reference versioned assets');
+    const css = await c.req('GET', m[1]);
+    assert.equal(css.status, 200);
+    assert.match(css.headers.get('cache-control'), /max-age=31536000.*immutable/);
+    assert.equal((await c.req('GET', '/assets/v-00000000/css/app.css')).status, 200, 'old version URLs still serve the file');
+    const me = await c.req('GET', '/api/auth/me');
+    assert.ok(Number(me.headers.get('ratelimit-limit')) > 0);
+    assert.ok(me.headers.get('ratelimit-remaining') !== null);
+});
+
+test('rate limiting: too many API calls -> 429 with Retry-After', async () => {
+    process.env.API_RATE_LIMIT_ANON_RPM = '5';
+    try {
+        const c = client();
+        let last;
+        for (let i = 0; i < 7; i++) last = await c.req('GET', '/api/auth/me', undefined, { 'x-forwarded-for': '198.51.100.77' });
+        assert.equal(last.status, 429);
+        assert.equal(last.json.code, 'rate_limited');
+        assert.ok(Number(last.headers.get('retry-after')) > 0);
+    } finally {
+        delete process.env.API_RATE_LIMIT_ANON_RPM;
+    }
+});

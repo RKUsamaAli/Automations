@@ -353,6 +353,7 @@ write_nginx() {
     local variant="$1" cert="${2:-}" key="${3:-}"
     install -m 0644 "$SCRIPT_DIR/templates/proxy-portal-upstream.conf" /etc/nginx/snippets/proxy-portal-upstream.conf
     install -m 0644 "$SCRIPT_DIR/templates/proxy-portal-ssl.conf" /etc/nginx/snippets/proxy-portal-ssl.conf
+    install -m 0644 "$SCRIPT_DIR/templates/proxy-portal-gzip.conf" /etc/nginx/snippets/proxy-portal-gzip.conf
     render_template "$SCRIPT_DIR/templates/nginx-${variant}.conf.tpl" /etc/nginx/sites-available/proxy-portal.conf \
         APP_DOMAIN="$APP_DOMAIN" PROXY_DOMAIN="$PROXY_DOMAIN" \
         WEB_PORT="$(app_env WEB_PORT 3000)" PROXY_PORT="$(app_env PROXY_PORT 8080)" \
