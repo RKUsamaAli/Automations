@@ -45,6 +45,8 @@
             return P.$('#url').focus();
         }
         P.$('#url').removeAttribute('aria-invalid');
+        // signed out: sign in first, then come back here and run it
+        if (!signedIn) { location.href = '/login?next=' + encodeURIComponent('/?q=' + url); return; }
         // words -> results page (Google via the server's browser); an address -> that site
         if (serverSearch && !LOOKS_LIKE_URL.test(url)) return goSearch(url);
         browse({ url: url }, P.$('#go'));
@@ -182,6 +184,14 @@
             P.$('#notice').textContent = me.portal.notice;
             P.$('#notice').classList.remove('hidden');
         }
-        return Promise.all([loadPools(me.portal), loadSites(), loadRecent()]);
+        return Promise.all([loadPools(me.portal), loadSites(), loadRecent()]).then(function () {
+            // back from signing in with a pending search/address (/?q=...): run it
+            var pending = new URLSearchParams(location.search).get('q');
+            if (pending) {
+                history.replaceState(null, '', '/');
+                P.$('#url').value = pending;
+                P.$('#go-form').requestSubmit();
+            }
+        });
     }).catch(function (err) { P.showError(goError, err.message); });
 })();

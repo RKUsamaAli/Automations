@@ -582,7 +582,7 @@ test.describe.serial('full product journey', () => {
         await shot(phone, '21b-start-signed-out-iphone', { fullPage: false });
         await phone.locator('#url').fill('weather');
         await phone.locator('#url').press('Enter');
-        await expect(phone).toHaveURL(/\/login\?next=%2Fsearch/); // searching asks to sign in first
+        await expect(phone).toHaveURL(/\/login\?next=%2F%3Fq%3Dweather/); // searching asks to sign in first, then continues
         await phone.goto(ownProxyUrl); // the still-active session from the previous step
         await expect(phone).toHaveURL(new RegExp('^' + S.appUrl.replace(/[.]/g, '\\.') + '/login'));
     });
