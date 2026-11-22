@@ -9,43 +9,46 @@
     <link rel="stylesheet" href="/assets/css/app.css">
 </head>
 <body>
-<!-- Top bar + bottom tab bar are added by Portal.shell() -->
-<main class="container narrow">
+<!-- Top bar + phone tab bar are added by Portal.shell() -->
+<main class="container">
+    <div class="page-head">
+        <div class="titles">
+            <h1>Browse</h1>
+            <p>Open a website through a proxy. A session keeps the site's logins until you end it.</p>
+        </div>
+    </div>
+
     <div id="notice" class="alert info hidden" role="status"></div>
 
     <!-- Address bar -->
-    <section class="card hero" aria-labelledby="hero-title">
-        <h1 id="hero-title">Where to today?</h1>
-        <p>Open any website through a secure proxy. Your session keeps logins until you end it.</p>
-        <form id="go-form" class="go-form" novalidate>
-            <div class="url-input">
-                <svg class="url-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
+    <section class="panel" aria-label="Open a website"><div class="panel-body">
+        <form id="go-form" class="open-form" novalidate>
+            <div>
                 <label for="url" class="sr-only">Website address</label>
-                <input id="url" type="url" inputmode="url" enterkeyhint="go" placeholder="Enter a website, e.g. example.com" autocapitalize="none" autocorrect="off" spellcheck="false">
+                <input id="url" type="url" inputmode="url" enterkeyhint="go" placeholder="Website address, e.g. example.com" autocapitalize="none" autocorrect="off" spellcheck="false">
             </div>
-            <button type="submit" id="go">Go</button>
+            <div class="via" id="via">
+                <label for="pool" class="sr-only">Connect through</label>
+                <select id="pool" aria-describedby="pool-health"></select>
+            </div>
+            <button type="submit" class="primary" id="go">Open</button>
         </form>
-        <div class="via" id="via">
-            <label for="pool" class="sr-only">Connect through</label>
-            <span>Connect through</span>
-            <select id="pool"></select>
-            <span id="pool-health"></span>
-        </div>
+        <div class="hint" id="pool-health" aria-live="polite"></div>
         <div id="go-error" class="alert error hidden" role="alert"></div>
-    </section>
+    </div></section>
 
-    <!-- Admin-configured sites -->
-    <section class="card hidden" id="sites-card" aria-labelledby="sites-title">
-        <div class="card-title"><h2 id="sites-title">Quick access</h2></div>
-        <div class="tiles" id="sites"></div>
-    </section>
-
-    <!-- Active sessions -->
-    <section class="card" aria-labelledby="sessions-title">
-        <div class="card-title"><h2 id="sessions-title">Your sessions</h2><span class="spacer"></span><button type="button" class="small" id="refresh">Refresh</button></div>
-        <p class="card-sub">A session remembers the site's cookies and logins. Resume to continue where you left off.</p>
-        <ul class="list" id="sessions"></ul>
-    </section>
+    <div class="grid main-side">
+        <!-- Active sessions (the main task: continue where you left off) -->
+        <section class="panel" aria-labelledby="sessions-title">
+            <div class="panel-head"><h2 id="sessions-title">Sessions <span class="muted" id="session-count"></span></h2><button type="button" class="small" id="refresh">Refresh</button></div>
+            <ul class="rows" id="sessions"></ul>
+        </section>
+        <!-- Admin-configured sites -->
+        <section class="panel hidden" id="sites-card" aria-labelledby="sites-title">
+            <div class="panel-head"><h2 id="sites-title">Quick access</h2></div>
+            <ul class="rows" id="sites"></ul>
+        </section>
+    </div>
 </main>
 <script src="/assets/js/common.js"></script>
 <script src="/assets/js/portal.js"></script>

@@ -67,3 +67,60 @@ test('error reports: trail + recent events, dedupe, grouping, resolve', () => {
     assert.equal(errorReports.resolveGroup(r.fingerprint, u.id), 2);
     assert.equal(errorReports.list({ status: 'open', q: 'shop.example' }).length, 0);
 });
+
+test('request log: levels, batching, filters, session timeline', () => {
+    const requestLog = require('../src/services/requestLog');
+    process.env.REQUEST_LOG_LEVEL = 'pages';
+    assert.equal(requestLog.wanted('page', 200), true);
+    assert.equal(requestLog.wanted('resource', 200), false, 'successful images/scripts skipped by default');
+    assert.equal(requestLog.wanted('resource', 404), true, 'failures always kept');
+    process.env.REQUEST_LOG_LEVEL = 'off';
+    assert.equal(requestLog.wanted('page', 200), false);
+    assert.equal(requestLog.wanted('page', 0), true);
+    process.env.REQUEST_LOG_LEVEL = 'pages';
+
+    const sid = 'r'.repeat(32);
+    requestLog.add({ source: 'proxy', kind: 'page', sessionId: sid, method: 'GET', url: 'https://shop.example/?password=x', host: 'shop.example', status: 200, ms: 120, bytes: 5000 });
+    requestLog.add({ source: 'proxy', kind: 'resource', sessionId: sid, method: 'GET', url: 'https://cdn.example/a.png', host: 'cdn.example', status: 200, ms: 5 });
+    requestLog.add({ source: 'proxy', kind: 'page', sessionId: sid, method: 'GET', url: 'https://shop.example/cart', host: 'shop.example', status: 0, error: 'reset' });
+    assert.equal(requestLog.list({ sessionId: sid }).length, 0, 'buffered, not yet written');
+    requestLog.flush();
+    const rows = requestLog.sessionTimeline(sid);
+    assert.deepEqual(rows.map((r) => r.status), [200, 0]);
+    assert.ok(!rows[0].url.includes('password=x'), 'urls redacted');
+    assert.equal(requestLog.list({ sessionId: sid, status: 'failed' }).length, 1);
+    assert.equal(requestLog.list({ q: 'cart' }).length, 1);
+});
+
+test('metrics: samples per process; unclean previous exit is detected', () => {
+    const metrics = require('../src/services/metrics');
+    const db = require('../src/db');
+    // a previous instance that "started" but never stopped and whose pid is gone
+    events.record('process_start', { detail: 'unit:0 pid 999999 release x node v' });
+    metrics.start('unit:0');
+    metrics.observe(200, 40);
+    metrics.observe(502, 900);
+    const row = metrics.sample();
+    assert.equal(row.process, 'unit:0');
+    assert.equal(row.requests, 2);
+    assert.equal(row.errors, 1);
+    assert.ok(row.rss_mb > 0 && row.p95_ms >= 40);
+    const types = db.get().prepare("SELECT type FROM events WHERE type LIKE 'process_%' ORDER BY id").all().map((r) => r.type);
+    assert.ok(types.includes('process_unclean_exit'), types.join(','));
+    metrics.stop('test');
+    assert.equal(db.get().prepare("SELECT type FROM events ORDER BY id DESC LIMIT 1").get().type, 'process_stop');
+    assert.ok(metrics.series(1).some((m) => m.process === 'unit:0'));
+});
+
+test('request log: "User activity" hides background reads but keeps actions and failures', () => {
+    const requestLog = require('../src/services/requestLog');
+    const uid = 424242;
+    requestLog.add({ source: 'web', kind: 'api', userId: uid, method: 'GET', url: '/api/portal/sessions', status: 200 });
+    requestLog.add({ source: 'web', kind: 'api', userId: uid, method: 'POST', url: '/api/portal/browse', status: 200 });
+    requestLog.add({ source: 'web', kind: 'api', userId: uid, method: 'GET', url: '/api/portal/sites', status: 500 });
+    requestLog.add({ source: 'proxy', kind: 'page', userId: uid, method: 'GET', url: 'https://a.example/', status: 200 });
+    requestLog.flush();
+    const urls = requestLog.list({ userId: uid, kind: 'activity' }).map((r) => r.url).sort();
+    assert.deepEqual(urls, ['/api/portal/browse', '/api/portal/sites', 'https://a.example/']);
+    assert.equal(requestLog.list({ userId: uid }).length, 4, 'everything is still available');
+});

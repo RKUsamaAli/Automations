@@ -104,7 +104,8 @@ test('real engine: hand-off, sticky upstream proxy, script injection, access con
         PUBLIC_CROSS_DOMAIN_PORT: String(crossPort),
         PROXY_WORKERS: '0',
         DATA_DIR: tmp,
-        LOG_LEVEL: 'warn'
+        LOG_LEVEL: 'warn',
+        METRICS_INTERVAL_MS: '500'
     };
     const child = spawn(process.execPath, [path.join(__dirname, '../src/proxy/server.js')], { env, stdio: ['ignore', 'pipe', 'pipe'] });
     let output = '';
@@ -195,7 +196,21 @@ test('real engine: hand-off, sticky upstream proxy, script injection, access con
     assert.equal(siteErr.kind, 'site_error');
     assert.equal(siteErr.severity, 'warning');
 
-    // ---- 6. DB bookkeeping ----
+    // ---- 6. normal activity is logged too: pages, failures, server health ----
+    const requestLog = require('../src/services/requestLog');
+    await new Promise((r) => setTimeout(r, 2600)); // engine flushes its request log every 2 s
+    const timeline = requestLog.sessionTimeline(sid);
+    const okPage = timeline.find((r) => r.kind === 'page' && r.host === 'shop.localtest' && r.status === 200);
+    assert.ok(okPage, 'successful page view stored: ' + JSON.stringify(timeline.map((r) => [r.kind, r.host, r.status])));
+    assert.equal(okPage.proxy_id, proxyRow.id, 'with the upstream proxy used');
+    assert.ok(okPage.ms >= 0 && okPage.bytes > 0);
+    assert.ok(timeline.some((r) => r.host === 'reset.localtest' && r.status === 0 && /reset/.test(r.error)), 'failed page stored with reason');
+    const db = require('../src/db');
+    const health = db.get().prepare("SELECT COUNT(*) AS samples, MAX(rss_mb) AS rss, SUM(requests) AS requests FROM server_metrics WHERE process = 'proxy'").get();
+    assert.ok(health.samples >= 2 && health.rss > 0 && health.requests >= 1, 'engine writes health metrics: ' + JSON.stringify(health));
+    assert.ok(db.get().prepare("SELECT 1 FROM events WHERE type = 'process_start' AND detail LIKE 'proxy pid %'").get(), 'process start recorded');
+
+    // ---- 7. DB bookkeeping ----
     const row = require('../src/services/sessions').get(sid);
     assert.equal(row.user_id, alice.id);
     assert.equal(row.proxy_id, proxyRow.id, 'session is stuck to the chosen proxy');

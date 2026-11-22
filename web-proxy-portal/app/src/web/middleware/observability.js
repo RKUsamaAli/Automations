@@ -5,15 +5,19 @@
  *  requestId  - every request gets an id (from nginx's X-Request-Id or a new
  *               one), echoed in the response header and in every log line /
  *               error report, so one failure can be followed end to end.
- *  trail      - remembers the last ~40 portal actions of each user IN MEMORY
- *               (pages opened, API calls + status + duration). Nothing is
- *               written for successful requests.
+ *  trail      - remembers the last ~40 portal actions of each user in memory
+ *               (attached to error reports).
+ *  requestLog - every portal page view / API call is stored (request_log
+ *               table, batched) for activity analysis and debugging.
+ *  metrics    - counts requests, errors and response times per minute.
  *  errorHandler - unexpected failures: 500 + error report (with the trail) +
  *               a reference the user can quote ("E-7K2P9Q").
  */
 const crypto = require('crypto');
 const Breadcrumbs = require('../../lib/breadcrumbs');
 const errorReports = require('../../services/errorReports');
+const requestLog = require('../../services/requestLog');
+const metrics = require('../../services/metrics');
 const { redactUrl, safeHeaders, redactObject } = require('../../lib/redact');
 const log = require('../../lib/logger')('web');
 
@@ -36,6 +40,18 @@ function recordTrail(req, res, next) {
     res.on('finish', () => {
         const ms = Date.now() - req.startedAt;
         const isApi = req.originalUrl.startsWith('/api/');
+        metrics.observe(res.statusCode, ms);
+        requestLog.add({
+            source: 'web',
+            kind: isApi ? 'api' : 'view',
+            userId: req.user ? req.user.id : null,
+            method: req.method,
+            url: req.originalUrl,
+            host: req.hostname,
+            status: res.statusCode,
+            ms,
+            requestId: req.id
+        });
         trail.add(trailKey(req), {
             type: isApi ? 'api' : 'page',
             method: req.method,

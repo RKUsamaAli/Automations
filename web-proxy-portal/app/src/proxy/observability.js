@@ -15,6 +15,8 @@
 const config = require('../config');
 const Breadcrumbs = require('../lib/breadcrumbs');
 const errorReports = require('../services/errorReports');
+const requestLog = require('../services/requestLog');
+const metrics = require('../services/metrics');
 const sessionsService = require('../services/sessions');
 const pools = require('../services/pools');
 const { describeProxy } = require('../lib/proxyString');
@@ -26,9 +28,27 @@ const trail = new Breadcrumbs({ size: 40 });
 const keyOf = (sid) => `sess:${sid}`;
 
 /** Called when a proxied response finishes (see guard.js). */
-function recordRequest({ sid, req, res, parsed, navigation, startedAt, userId, aborted = false }) {
+function recordRequest({ sid, req, res, parsed, navigation, startedAt, userId, proxyId = null, bytes = null, aborted = false }) {
     const status = aborted ? 0 : res.statusCode;
     const failed = aborted || status >= 400;
+    const ms = Date.now() - startedAt;
+    metrics.observe(status, ms);
+    // Stored activity log (pages + failures by default; REQUEST_LOG_LEVEL=all for everything).
+    requestLog.add({
+        source: 'proxy',
+        kind: navigation ? 'page' : 'resource',
+        userId,
+        sessionId: sid,
+        method: req.method,
+        url: parsed ? parsed.destUrl : req.url,
+        host: parsed ? parsed.host : null,
+        status,
+        ms,
+        bytes,
+        proxyId,
+        requestId: req.portalRequestId,
+        error: aborted ? 'connection closed before the response finished' : null
+    });
     if (!navigation && !failed) return; // successful resources: nothing to keep
     const crumb = {
         type: navigation ? 'page' : 'resource',
@@ -106,6 +126,11 @@ function makePageErrorHandler(session) {
             const [category, reason] = classify(err);
             const req = ctx && ctx.req;
             trail.add(keyOf(sid), { type: 'page', method: req ? req.method : 'GET', url: redactUrl(destUrl), status: 'failed', error: category });
+            requestLog.add({
+                source: 'proxy', kind: 'page', userId: row ? row.user_id : null, sessionId: sid, method: req ? req.method : 'GET',
+                url: destUrl, host: ctx && ctx.dest ? ctx.dest.hostname : null, status: 0, proxyId: row && row.proxy_id,
+                requestId: req && req.portalRequestId, error: `${category}: ${err && err.message ? err.message : err}`
+            });
             const ref = errorReports.report({
                 source: 'proxy',
                 kind: 'page_load_failed',

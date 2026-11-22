@@ -287,6 +287,13 @@ function recordHealth(id, { ok, latencyMs, error, slowMs, failuresBeforeDead }) 
         ok ? null : String(error || 'failed').slice(0, 300),
         id
     );
+    conn.prepare('INSERT INTO proxy_checks (ts, proxy_id, ok, latency_ms, error) VALUES (?, ?, ?, ?, ?)').run(
+        Date.now(),
+        id,
+        ok ? 1 : 0,
+        ok ? latencyMs : null,
+        ok ? null : String(error || 'failed').slice(0, 200)
+    );
     cache.delete('proxy:' + id);
     return status;
 }
@@ -342,6 +349,11 @@ function pickProxy(poolId, excludeIds = []) {
     return rows[0];
 }
 
+/** Last health checks of one proxy (newest first) - Admin -> proxy history. */
+function proxyChecks(proxyId, limit = 100) {
+    return db.get().prepare('SELECT ts, ok, latency_ms, error FROM proxy_checks WHERE proxy_id = ? ORDER BY id DESC LIMIT ?').all(proxyId, limit);
+}
+
 function isUsable(proxy) {
     return !!proxy && proxy.enabled === 1 && proxy.status !== 'dead';
 }
@@ -374,5 +386,6 @@ module.exports = {
     resolvePoolId,
     pickProxy,
     isUsable,
+    proxyChecks,
     clearCache: () => cache.clear()
 };

@@ -30,10 +30,10 @@
         if (params.get('signedout')) P.showError(notice, 'You have been signed out.');
         if (params.get('registered')) P.showError(notice, 'Account created. You can sign in now.');
 
-        P.$all('.segmented button').forEach(function (btn) {
+        P.$all('.tabs button').forEach(function (btn) {
             btn.addEventListener('click', function () {
                 mode = btn.getAttribute('data-mode');
-                P.$all('.segmented button').forEach(function (b) {
+                P.$all('.tabs button').forEach(function (b) {
                     b.classList.toggle('active', b === btn);
                     b.setAttribute('aria-selected', String(b === btn));
                 });

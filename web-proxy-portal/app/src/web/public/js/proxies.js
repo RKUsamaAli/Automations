@@ -20,11 +20,12 @@
     async function load() {
         var data = await P.api('GET', '/api/portal/proxies');
         var count = data.proxies.length;
-        P.$('#usage').textContent = count + ' of ' + data.limit + ' used';
+        P.$('#usage').textContent = '(' + count + ')';
+        P.$('#usage-hint').textContent = count + ' of ' + data.limit + ' used';
         P.$('#usage-bar').style.width = Math.min(100, Math.round((count / Math.max(1, data.limit)) * 100)) + '%';
         var ul = P.$('#list');
         if (!count) {
-            ul.innerHTML = '<li class="empty">' + P.icon('proxies', '') + '<div><strong>No proxies yet</strong>Paste your proxy list above to get started.</div></li>';
+            ul.innerHTML = '<li class="empty"><div><strong>No proxies yet</strong>Paste your list in “Add proxies” to get started.</div></li>';
             return;
         }
         ul.innerHTML = data.proxies.map(function (x) {
@@ -33,8 +34,8 @@
             if (x.latency_ms != null && x.enabled) meta.push(x.latency_ms + ' ms');
             meta.push('checked ' + P.timeAgo(x.last_checked_at));
             if (x.active_sessions) meta.push(x.active_sessions + ' active session' + (x.active_sessions > 1 ? 's' : ''));
-            return '<li><div class="grow"><code>' + esc(label) + '</code><div class="meta">' + esc(meta.join(' · ')) + '</div>' +
-                (x.last_error && x.status !== 'healthy' ? '<div class="meta">' + esc(x.last_error) + '</div>' : '') + '</div>' +
+            return '<li><div class="grow"><div class="title mono">' + esc(label) + '</div><div class="meta">' + esc(meta.join(' · ')) +
+                (x.last_error && x.status !== 'healthy' ? ' · ' + esc(x.last_error) : '') + '</div></div>' +
                 statusBadge(x) +
                 '<div class="actions"><button type="button" class="small" data-toggle="' + x.id + '" data-enabled="' + x.enabled + '">' + (x.enabled ? 'Disable' : 'Enable') + '</button>' +
                 '<button type="button" class="small danger" data-remove="' + x.id + '" aria-label="Remove ' + esc(label) + '">Remove</button></div></li>';

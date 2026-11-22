@@ -16,6 +16,7 @@ const crypto = require('crypto');
 const db = require('../db');
 const config = require('../config');
 const events = require('./events');
+const requestLog = require('./requestLog');
 const RateLimiter = require('../lib/rateLimiter');
 const { redactUrl, redactObject, redactText } = require('../lib/redact');
 const log = require('../lib/logger')('errors');
@@ -83,8 +84,20 @@ function report(r) {
         const ref = newRef();
         // Recent portal-level actions of this user (sign-in, session start, ...) complete the picture.
         const recentEvents = r.userId ? events.list({ userId: r.userId, limit: 15 }).reverse() : [];
+        // Stored activity from the OTHER process (the in-memory trail only knows its own):
+        // a portal error gets the user's recent proxied pages and vice versa.
+        let stored = [];
+        if (r.userId) {
+            requestLog.flush();
+            const own = r.source === 'client' ? 'web' : r.source;
+            stored = requestLog
+                .recentForUser(r.userId, 20)
+                .filter((row) => row.source !== own)
+                .map((row) => ({ t: row.ts, type: row.kind === 'page' ? 'page' : row.kind === 'resource' ? 'resource' : 'api', method: row.method, url: row.url, status: row.status || 'failed', ms: row.ms }));
+        }
         const trail = [
             ...recentEvents.map((e) => ({ t: e.created_at, type: 'event', event: e.type, detail: e.detail })),
+            ...stored,
             ...(r.breadcrumbs || [])
         ].sort((a, b) => a.t - b.t);
 

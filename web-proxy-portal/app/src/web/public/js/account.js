@@ -7,10 +7,14 @@
     P.shell('account').then(function (me) {
         if (!me.user) return;
         var u = me.user;
-        P.$('#avatar').textContent = u.username.charAt(0);
-        P.$('#avatar').style.background = P.colorFor(u.username);
-        P.$('#profile-title').textContent = u.username;
-        P.$('#profile-meta').textContent = [u.email, u.role === 'admin' ? 'Administrator' : 'Member', 'joined ' + new Date(u.createdAt).toLocaleDateString()].filter(Boolean).join(' · ');
+        var rows = [
+            ['Username', u.username],
+            ['E-mail', u.email || 'Not set'],
+            ['Role', u.role === 'admin' ? 'Administrator' : 'Member'],
+            ['Member since', new Date(u.createdAt).toLocaleDateString()],
+            ['Last sign-in', u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleString() : '-']
+        ];
+        P.$('#profile').innerHTML = rows.map(function (r) { return '<dt>' + P.esc(r[0]) + '</dt><dd>' + P.esc(r[1]) + '</dd>'; }).join('');
     });
 
     P.$('#pw-form').addEventListener('submit', async function (e) {

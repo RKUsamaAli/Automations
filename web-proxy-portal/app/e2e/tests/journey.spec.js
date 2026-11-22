@@ -37,7 +37,7 @@ test.describe.serial('full product journey', () => {
     // ------------------------------------------------------------- admin --
     test('admin signs in and sees the dashboard', async () => {
         await admin.goto(S.appUrl + '/login');
-        await expect(admin.getByRole('heading', { name: 'Web Portal' })).toBeVisible();
+        await expect(admin.getByRole('heading', { name: 'Sign in' })).toBeVisible();
         await shot(admin, '01-login-desktop');
         await login(admin, S.admin.username, S.admin.password);
         await expect(admin).toHaveURL(S.appUrl + '/');
@@ -155,7 +155,7 @@ test.describe.serial('full product journey', () => {
     test('user signs in and sees the Browse screen with allowed pools', async () => {
         await login(phone, user.name, user.pass);
         await expect(phone).toHaveURL(S.appUrl + '/');
-        await expect(phone.getByRole('heading', { name: new RegExp(user.name) })).toBeVisible();
+        await expect(phone.locator('.user-menu')).toContainText(user.name);
         const options = await phone.locator('#pool option').allTextContents();
         expect(options.join('|')).toContain(pools.shared);
         expect(options.join('|')).toContain(pools.assigned);
@@ -221,7 +221,7 @@ test.describe.serial('full product journey', () => {
         await phone.locator('#pool').selectOption({ label: 'My proxies' });
         await expect(phone.locator('#pool-health')).toHaveText('1 of 1 online');
         await phone.locator('#url').fill('http://shop.localtest/'); // the fake shop is plain HTTP; without a scheme the portal assumes https://
-        await phone.getByRole('button', { name: 'Go' }).click();
+        await phone.getByRole('button', { name: 'Open', exact: true }).click();
         await expect(phone.locator('#shop-title')).toBeVisible();
         await expect(phone.locator('#via-name')).toHaveText('Your own proxy');
         ownProxyUrl = phone.url();
@@ -250,10 +250,30 @@ test.describe.serial('full product journey', () => {
         await admin.getByRole('button', { name: 'Sessions' }).click();
         await expect(admin.locator('tr', { hasText: user.name }).first()).toBeVisible();
         await shot(admin, '18-admin-sessions');
+        // every page a session loaded (successful ones too) is in its timeline
+        // the request log is written in 2 s batches: reopen until the page row is there
+        await expect(async () => {
+            await admin.keyboard.press('Escape');
+            await admin.locator('tr', { hasText: user.name }).first().getByRole('button', { name: 'Timeline' }).click();
+            await expect(admin.locator('#modal tbody tr', { hasText: 'http://shop.localtest/' }).first()).toBeVisible({ timeout: 1000 });
+        }).toPass({ timeout: 10000 });
+        await expect(admin.locator('#modal tbody tr').first()).toContainText('200');
+        await shot(admin, '18b-admin-session-timeline', { fullPage: false });
+        await admin.keyboard.press('Escape');
+        // the request log: what users did, successful or not
+        await admin.getByRole('button', { name: 'Requests' }).click();
+        await expect(admin.locator('#view tbody tr').first()).toBeVisible();
+        await expect(admin.locator('#view')).toContainText('shop.localtest');
+        await shot(admin, '18c-admin-requests', { fullPage: false });
         await admin.waitForTimeout(11000); // usage counters are flushed to the database every 10 s
         await admin.getByRole('button', { name: 'Dashboard' }).click();
-        await expect(admin.getByText('Bandwidth (14 days)')).toBeVisible();
+        await expect(admin.getByRole('heading', { name: 'Traffic, last 24 hours' })).toBeVisible();
         await shot(admin, '19-admin-dashboard');
+        // server health: one sample per process per minute + start/stop events
+        await admin.getByRole('button', { name: 'Server' }).click();
+        await expect(admin.getByRole('heading', { name: 'Processes' })).toBeVisible();
+        await expect(admin.locator('#view')).toContainText('Process started');
+        await shot(admin, '19d-admin-server');
         await admin.getByRole('button', { name: 'Settings' }).click();
         await expect(admin.locator('#set-registration_mode')).toBeVisible();
         await shot(admin, '20-admin-settings');
@@ -262,7 +282,7 @@ test.describe.serial('full product journey', () => {
     test('a page that fails shows a friendly error with a reference; the admin finds it with the steps', async () => {
         await phone.goto(S.appUrl + '/');
         await phone.locator('#url').fill('http://broken.localtest/checkout');
-        await phone.getByRole('button', { name: 'Go' }).click();
+        await phone.getByRole('button', { name: 'Open', exact: true }).click();
         await expect(phone.getByRole('heading', { name: "This page couldn't load" })).toBeVisible({ timeout: 20000 });
         const ref = await phone.locator('.ref code').textContent();
         expect(ref).toMatch(/^E-[2-9A-HJ-NP-Z]{6}$/);
@@ -304,8 +324,8 @@ test.describe.serial('full product journey', () => {
         await login(phone, user.name, user.pass);
         await expect(phone).toHaveURL(S.appUrl + '/');
         await phone.goto(S.appUrl + '/account');
-        await phone.getByLabel('Current password').fill(user.pass);
-        await phone.getByLabel('New password').fill(user.newPass);
+        await phone.getByLabel('Current password', { exact: true }).fill(user.pass);
+        await phone.getByLabel('New password', { exact: true }).fill(user.newPass);
         await phone.getByRole('button', { name: 'Update password' }).click();
         await expect(phone.getByText('Password updated.')).toBeVisible();
         await shot(phone, '22-account-iphone');

@@ -37,6 +37,8 @@ const { setupRoutes, ensureInjector } = require('./routes');
 const socksBridge = require('./socksBridge');
 const observability = require('./observability');
 const errorReports = require('../services/errorReports');
+const metrics = require('../services/metrics');
+const requestLog = require('../services/requestLog');
 
 const useWorkers = config.proxy.workers > 0;
 const isPrimary = cluster.isPrimary;
@@ -117,6 +119,10 @@ const flushTimer = setInterval(() => {
 }, 10000);
 flushTimer.unref();
 
+// ------------------------------------------------------------- metrics ----
+// "proxy" = single process or cluster primary, "proxy:<n>" = cluster worker.
+metrics.start(isPrimary ? 'proxy' : `proxy:${cluster.worker.id}`);
+
 // ---------------------------------------------------------------- jobs ----
 if (isPrimary) {
     require('../jobs/healthCheck').schedule();
@@ -130,6 +136,8 @@ let shuttingDown = false;
 exitHook(() => {
     shuttingDown = true;
     log.info('exit signal: saving sessions and closing');
+    metrics.stop('shutdown');
+    requestLog.flush();
     try {
         usage.flush();
     } catch (_) {

@@ -118,11 +118,11 @@ function trackBytes(res, userId, sessionId, step) {
     res.once('finish', () => {
         done = true;
         usage.track(userId, sessionId, bytes);
-        observability.recordRequest({ ...step, res });
+        observability.recordRequest({ ...step, res, bytes });
     });
     // Connection dropped before the response finished (upstream hung up, user navigated away ...)
     res.once('close', () => {
-        if (!done) observability.recordRequest({ ...step, res, aborted: true });
+        if (!done) observability.recordRequest({ ...step, res, bytes, aborted: true });
     });
 }
 
@@ -247,7 +247,7 @@ function createGuard({ rh, sessionStore }) {
         }
 
         // ---- 8. usage tracking -----------------------------------------------
-        if (!isWebsocket) trackBytes(res, user.id, sid, { sid, req, parsed, navigation, startedAt, userId: user.id });
+        if (!isWebsocket) trackBytes(res, user.id, sid, { sid, req, parsed, navigation, startedAt, userId: user.id, proxyId: row.proxy_id });
 
         // ---- 9. dropped connections on page loads ------------------------------
         // When the upstream proxy / site hangs up, hammerhead just closes the

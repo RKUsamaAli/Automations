@@ -28,9 +28,10 @@ async function shot(page, name, opts = {}) {
     if (fullPage) {
         await page.evaluate(() => {
             document.querySelectorAll('.toast').forEach((t) => t.remove());
-            document.querySelectorAll('.topbar, .admin-tabs, .bottomnav').forEach((el) => {
+            document.querySelectorAll('.topbar, .admin-tabs, .bottomnav, .sidebar').forEach((el) => {
                 el.dataset.shotPos = el.style.position || '';
                 el.style.position = 'static';
+                if (el.classList.contains('sidebar')) el.style.height = 'auto';
             });
             document.body.classList.remove('has-bottomnav');
             window.scrollTo(0, 0);
@@ -41,6 +42,7 @@ async function shot(page, name, opts = {}) {
         await page.evaluate(() => {
             document.querySelectorAll('[data-shot-pos]').forEach((el) => {
                 el.style.position = el.dataset.shotPos;
+                el.style.height = '';
                 delete el.dataset.shotPos;
             });
             if (document.querySelector('.bottomnav')) document.body.classList.add('has-bottomnav');

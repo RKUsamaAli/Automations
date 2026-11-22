@@ -283,3 +283,17 @@ test('browser errors are reported with the browser trail; exports work', async (
     const lines = jsonl.text.trim().split('\n').map((l) => JSON.parse(l));
     assert.ok(lines.some((l) => l.ref === r.json.ref));
 });
+
+test('admin can read the request log, a session timeline and server health', async () => {
+    const admin = client();
+    await admin.req('GET', '/login');
+    await admin.req('POST', '/api/auth/login', { username: 'admin1', password: 'adminpass123' });
+    await admin.req('GET', '/api/admin/overview');
+    require('../src/services/requestLog').flush();
+    const rows = (await admin.req('GET', '/api/admin/requests?hours=1')).json;
+    assert.ok(rows.some((r) => r.source === 'web' && r.url === '/api/admin/overview' && r.status === 200 && r.username === 'admin1'));
+    const server = (await admin.req('GET', '/api/admin/server?hours=1')).json;
+    assert.ok(Array.isArray(server.series) && Array.isArray(server.processes) && Array.isArray(server.traffic));
+    const csv = await admin.req('GET', '/api/admin/requests.csv?hours=1');
+    assert.match(csv.text, /^time_utc,source,kind,username/);
+});

@@ -24,6 +24,8 @@ const log = require('../lib/logger')('web');
 const { securityHeaders, cookies, csrf } = require('./middleware/security');
 const { loadUser, requireUser, requireAdmin } = require('./middleware/auth');
 const { requestId, recordTrail, errorHandler } = require('./middleware/observability');
+const metrics = require('../services/metrics');
+const requestLog = require('../services/requestLog');
 
 config.validate();
 db.open();
@@ -81,6 +83,8 @@ app.use(errorHandler);
 
 const server = app.listen(config.web.port, config.web.host, () => {
     log.info(`portal listening on http://${config.web.host}:${config.web.port} (public: ${config.appBaseUrl}, release: ${config.releaseName})`);
+    // Health metrics + lifecycle events; one name per PM2 instance ("web:0", "web:1").
+    if (process.env.NODE_ENV !== 'test') metrics.start(`web:${process.env.NODE_APP_INSTANCE || 0}`);
     // Tell PM2 we are ready (used with wait_ready for zero-downtime reloads).
     if (process.send) process.send('ready');
 });
@@ -88,6 +92,8 @@ const server = app.listen(config.web.port, config.web.host, () => {
 // Graceful shutdown: finish in-flight requests, then exit (PM2 sends SIGINT).
 function shutdown(signal) {
     log.info(`${signal} received, closing portal`);
+    metrics.stop(signal);
+    requestLog.flush();
     server.close(() => {
         db.close();
         process.exit(0);

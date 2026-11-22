@@ -14,6 +14,8 @@
  *   Settings  : GET/PUT /settings
  *   Sessions  : GET /sessions, POST /sessions/:id/end
  *   Logs      : GET /usage, GET /events, GET /events.csv (export)
+ *   Requests  : GET /requests, GET /requests.csv, GET /sessions/:id/timeline
+ *   Server    : GET /server (metrics, processes, lifecycle), GET /proxies/:id/checks
  *   Errors    : GET /errors, GET /errors/:ref, POST /errors/:id/resolve, POST /errors/:id/reopen,
  *               POST /errors/group/:fingerprint/resolve, GET /errors.jsonl (export)
  */
@@ -29,6 +31,8 @@ const events = require('../../services/events');
 const healthCheck = require('../../jobs/healthCheck');
 const config = require('../../config');
 const errorReports = require('../../services/errorReports');
+const requestLog = require('../../services/requestLog');
+const metrics = require('../../services/metrics');
 const { isBug } = require('../../lib/errors');
 
 const router = express.Router();
@@ -273,6 +277,56 @@ router.get('/events.csv', (req, res) => {
     for (const e of rows) res.write([new Date(e.created_at).toISOString(), e.type, e.user_id, e.username, e.detail, e.ip].map(csvCell).join(',') + '\n');
     res.end();
 });
+
+// ------------------------------------------------------------- requests ----
+const reqFilter = (q) => ({
+    userId: q.user,
+    sessionId: q.session,
+    kind: q.kind,
+    status: q.status,
+    q: q.q,
+    since: q.hours ? Date.now() - Number(q.hours) * 3600000 : undefined,
+    limit: q.limit
+});
+router.get('/requests', h((req) => requestLog.list(reqFilter(req.query))));
+router.get('/requests.csv', (req, res) => {
+    const rows = requestLog.list({ ...reqFilter(req.query), since: Date.now() - (Number(req.query.hours) || 24) * 3600000, limit: 100000 }).reverse();
+    res.set('Content-Type', 'text/csv; charset=utf-8');
+    res.set('Content-Disposition', `attachment; filename="portal-requests-${new Date().toISOString().slice(0, 10)}.csv"`);
+    res.write('time_utc,source,kind,username,session,method,status,ms,bytes,host,url,proxy_id,request_id,error\n');
+    for (const r of rows) {
+        res.write([new Date(r.ts).toISOString(), r.source, r.kind, r.username, r.session_id ? r.session_id.slice(0, 8) : '', r.method, r.status, r.ms, r.bytes, r.host, r.url, r.proxy_id, r.request_id, r.error].map(csvCell).join(',') + '\n');
+    }
+    res.end();
+});
+router.get(
+    '/sessions/:id/timeline',
+    h((req) => {
+        const s = sessions.get(req.params.id);
+        if (!s) throw new Error('Session not found');
+        const user = users.getById(s.user_id);
+        return { session: { ...s, username: user ? user.username : null }, requests: requestLog.sessionTimeline(s.id) };
+    })
+);
+
+// --------------------------------------------------------------- server ----
+router.get(
+    '/server',
+    h((req) => {
+        const hours = Math.min(Number(req.query.hours) || 24, 24 * 14);
+        const series = metrics.series(hours);
+        const latest = {};
+        for (const m of series) latest[m.process] = m; // last row per process
+        return {
+            hours,
+            series,
+            processes: Object.values(latest).sort((a, b) => a.process.localeCompare(b.process)),
+            lifecycle: events.list({ limit: 300 }).filter((e) => e.type.startsWith('process_')).slice(0, 30),
+            traffic: requestLog.summary(Math.min(hours, 72))
+        };
+    })
+);
+router.get('/proxies/:id/checks', h((req) => pools.proxyChecks(id(req))));
 
 // --------------------------------------------------------------- errors ----
 router.get('/errors', h((req) => ({ reports: errorReports.list({ status: req.query.status || 'open', q: req.query.q || '' }), open: errorReports.countOpen() })));

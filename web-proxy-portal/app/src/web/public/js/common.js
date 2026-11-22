@@ -199,9 +199,9 @@
         opts = opts || {};
         return new Promise(function (resolve) {
             var wrap = document.createElement('div');
-            wrap.className = 'modal-backdrop';
-            wrap.innerHTML = '<div class="modal small" role="alertdialog" aria-modal="true" aria-labelledby="cd-title">' +
-                '<h2 id="cd-title">' + esc(opts.title || 'Are you sure?') + '</h2><p class="muted">' + esc(message) + '</p>' +
+            wrap.className = 'dialog-backdrop';
+            wrap.innerHTML = '<div class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="cd-title" aria-describedby="cd-msg">' +
+                '<h2 id="cd-title">' + esc(opts.title || 'Are you sure?') + '</h2><p class="muted" id="cd-msg">' + esc(message) + '</p>' +
                 '<div class="row end"><button type="button" data-no>Cancel</button>' +
                 '<button type="button" data-yes class="' + (opts.danger ? 'danger solid' : 'primary') + '">' + esc(opts.confirmLabel || 'Confirm') + '</button></div></div>';
             document.body.appendChild(wrap);
@@ -248,8 +248,8 @@
     }
 
     /**
-     * Renders the user app chrome: top bar (logo, nav, user) and the phone
-     * bottom tab bar. active: 'browse' | 'proxies' | 'account'
+     * Renders the user app chrome: top bar (product, sections, user, sign out)
+     * and, on phones, a bottom tab bar. active: 'browse' | 'proxies' | 'account'
      */
     async function shell(active) {
         var info = await loadMe();
@@ -261,15 +261,23 @@
         items.push({ id: 'account', href: '/account', label: 'Account', icon: 'account' });
         if (info.user.role === 'admin') items.push({ id: 'admin', href: '/admin', label: 'Admin', icon: 'admin' });
         var links = items.map(function (i) {
-            return '<a href="' + i.href + '"' + (i.id === active ? ' class="active" aria-current="page"' : '') + '>' + icon(i.icon) + '<span>' + esc(i.label) + '</span></a>';
+            return '<a href="' + i.href + '"' + (i.id === active ? ' class="active" aria-current="page"' : '') + '>' + icon(i.icon, 'icon') + '<span>' + esc(i.label) + '</span></a>';
         }).join('');
+        var skip = document.createElement('a');
+        skip.className = 'skip-link';
+        skip.href = '#main';
+        skip.textContent = 'Skip to content';
         var header = document.createElement('header');
         header.className = 'topbar';
-        header.innerHTML = '<a class="logo" href="/"><span class="logo-mark">' + icon('logo', '') + '</span><span>' + esc(title) + '</span></a>' +
-            '<nav class="topnav" aria-label="Main">' + links + '</nav><span class="spacer"></span>' +
-            '<a class="user-chip hide-mobile" href="/account" title="Account"><span class="avatar">' + esc(info.user.username.charAt(0)) + '</span>' + esc(info.user.username) + '</a>' +
-            '<button type="button" class="small" id="shell-logout" title="Sign out">' + icon('logout') + '<span class="hide-mobile">Sign out</span></button>';
+        header.innerHTML = '<a class="brand" href="/"><span class="brand-mark">' + icon('logo', '') + '</span><span>' + esc(title) + '</span></a>' +
+            '<nav class="topnav" aria-label="Main">' + links + '</nav>' +
+            '<div class="user-menu"><span class="avatar" aria-hidden="true">' + esc(info.user.username.charAt(0)) + '</span>' +
+            '<span class="hide-sm">' + esc(info.user.username) + '</span>' +
+            '<button type="button" class="ghost small" id="shell-logout">' + icon('logout', 'icon') + '<span>Sign out</span></button></div>';
         document.body.insertBefore(header, document.body.firstChild);
+        document.body.insertBefore(skip, header);
+        var main = document.querySelector('main');
+        if (main) { main.id = 'main'; main.setAttribute('tabindex', '-1'); }
         var bottom = document.createElement('nav');
         bottom.className = 'bottomnav';
         bottom.setAttribute('aria-label', 'Main');

@@ -1,7 +1,45 @@
 # Logging, error reports and activity analysis
 
-**Principle:** successful activity is not stored in detail. When something fails, the
-steps that led to it ARE stored, so the failure can be reproduced and fixed.
+Four layers, from "what did this user do" to "why did the server struggle":
+
+| Layer | Where to look | Stored |
+|---|---|---|
+| **Request log** - every page opened through the proxy, portal actions, every failure | Admin → Requests, Sessions → Timeline | `request_log`, `REQUEST_LOG_RETENTION_DAYS` (14) |
+| **Server health** - memory, CPU, event-loop lag, traffic, errors, p95 per process per minute; starts, stops, crashes | Admin → Server | `server_metrics`, `METRICS_RETENTION_DAYS` (30) |
+| **Error reports** - each failure with the steps before it and a reference for the user | Admin → Errors | `error_reports`, `ERROR_RETENTION_DAYS` (30) |
+| **Activity log** - sign-ins, approvals, sessions, proxy changes, admin actions | Admin → Activity log | `events`, `LOG_RETENTION_DAYS` (30) |
+
+All database writes are batched (every ~2 s), so logging never slows browsing down.
+
+## 0. Request log and server health
+
+**Request log** (`REQUEST_LOG_LEVEL`):
+
+* `pages` (default): every page a user opened through the proxy (site, status, duration, size,
+  **which upstream proxy**), every portal page and API call, and every failed sub-request.
+* `all`: also every successful image/script/XHR (much more data; use while debugging a site).
+* `off`: failures only.
+
+Admin → **Requests** filters by user, type, result and time range; the default "User activity"
+view hides the portal's own background reads. **Export CSV** for analysis. Each browsing
+session's full page history is in Sessions → **Timeline**.
+
+**Server health** (Admin → **Server**): every process (`web:0`, `web:1`, `proxy`, `proxy:N`
+workers) records once a minute: memory (RSS, heap), CPU %, **event-loop lag** (how blocked the
+process is), machine load and free memory, requests, errors, p95 response time and active
+sessions. The same sample is also written as a JSON `health` line to the process log.
+Lifecycle events: `Process started` / `Process stopped` (with uptime and memory) and
+**`Process crashed or killed`** - recorded at the next start when the previous instance
+disappeared without a clean shutdown (crash, out-of-memory kill, power loss), including its
+last health sample. That is usually the explanation for "the server went down at 03:12".
+
+Upstream proxy health checks are kept per proxy: Proxy pools → Proxies → **History**
+(latency chart + every check).
+
+## Error reports - principle
+
+When something fails, the steps that led to it are stored with the error, so the failure can
+be reproduced and fixed.
 
 ## 1. Error reports (Admin → Errors)
 
