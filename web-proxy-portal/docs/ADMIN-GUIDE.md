@@ -54,11 +54,13 @@ The session then stays on one proxy (sticky) until it ends. If that proxy dies a
 | Domain allowlist | off | Only configured sites + extra domains can be opened |
 | Strict allowlist | off | Also block images/scripts from other domains (breaks most sites that use CDNs) |
 | Requests per minute | 1200 | Per user. One page load can be 100+ requests |
-| Bandwidth MB per day | 0 (unlimited) | Per user, resets 00:00 UTC |
+| Bandwidth MB per day | 0 (unlimited) | Per user, resets at midnight in the user's own time zone |
 | Max active sessions | 5 | Per user |
 | When no healthy proxy | Refuse | `Connect directly` would use (and expose) the server's IP |
 | Failover | on | Move a session to another proxy of its pool if its proxy dies |
 | Lock session to IP | off | Breaks phones switching Wi-Fi ↔ 4G/5G |
+| Search engine | Google | What words typed in the Browse address bar search with: Google, DuckDuckGo, Bing or Custom (results URL with `{q}`, optional suggestions URL returning OpenSearch JSON). With the allowlist on, add the engine's domain to the extra domains |
+| Suggest search terms | on | The address bar asks the engine for suggestions while typing (cached 10 min) |
 
 Changes apply within a few seconds without restarting anything.
 
@@ -71,10 +73,39 @@ Use `window.__portal.page.url` / `.host` for the real page address. Examples:
 
 ## Monitoring
 
-* **Dashboard** – active sessions, usable proxies, bandwidth (14 days), recent events
-* **Sessions** – who is browsing what, through which proxy; *End* stops a session within 30 s
-* **Logs** – usage per user (7 days) and the event log: logins, failed logins, blocked
-  domains, rate limits, proxy dead/recovered, failovers, admin changes (kept 30 days)
+* **Dashboard** – active sessions, usable proxies, today's traffic, 24-hour chart, recent activity
+* **Sessions** – who is browsing what, through which proxy; *Timeline* lists every page; *End* stops a session within 30 s
+* **Requests** – what users did (pages, portal actions, failures) with browser/device
+* **Errors** – failures with the steps before them (see [LOGGING.md](LOGGING.md))
+* **Server** – memory, CPU, event-loop lag and restarts per process
+* **Activity log** – every action with who, what changed, device and server; filter by
+  event, source, *Warnings and errors* or user; **Details** shows the before/after values
+
+Long lists (Users, pool proxies, Sessions, Requests, Errors, Activity log, a session's
+timeline) load 50 rows at a time while you scroll; the summary line above each list
+counts the **whole** filtered set. *Load more* does the same from the keyboard.
+
+Search boxes suggest matching users, sites, error references and types as you type
+(↑/↓ and Enter to pick). Picking a user filters the list by that user and shows a
+removable *User: name ×* chip. Form fields with known answers (country, start URL,
+domain patterns) suggest them too; typing anything else still works.
+
+Times are shown in your browser's time zone (shown in the sidebar); exports include
+both UTC and local time.
+
+## Signing in
+
+* Signing in issues an **identity token** (24 h, `IDENTITY_TOKEN_TTL_HOURS`) and
+  short **access tokens** (5 min, `ACCESS_TOKEN_TTL_MINUTES`) that the browser
+  renews silently - users notice nothing.
+* When the identity token expires, a *Your session has expired* prompt appears over
+  the page; entering the password (or access code) continues exactly where the user
+  was. Only the same account can continue; *Sign out* is offered too.
+
+## Theme
+
+The switch in the top bar / admin sidebar / sign-in page chooses **System** (follow
+the device), **Light** or **Dark**. The choice is saved per browser.
 
 ## Disabling someone
 

@@ -44,7 +44,9 @@ It is idempotent: re-running is safe. It performs:
 5. `/opt/proxy-portal/shared/.env` with generated `APP_SECRET`/`DEPLOY_SECRET`, memory limits sized to the RAM
 6. read-only GitHub **deploy key** → add the printed key in *GitHub → repo → Settings → Deploy keys*
 7. ufw (SSH, 80, 443, 8443), fail2ban (sshd + nginx rate-limit abuse), unattended upgrades
-8. nginx + Let's Encrypt certificate for both hostnames (auto-renew + nginx reload hook)
+8. nginx + Let's Encrypt certificate for both hostnames (auto-renew + nginx reload hook);
+   snippets in `/etc/nginx/snippets/`: TLS, upstream headers, gzip (`proxy-portal-gzip.conf`),
+   keep-alive connection pools to Node.js
 9. PM2 boot service `pm2-portal`, log rotation (20 MB × 14), daily backup cron (03:17)
 10. commands `portal-deploy`, `portal-rollback`, `portal-status`, `portal-backup`,
     `portal-cli`, `portal-restart`, `portal-logs`, `portal-setup`
@@ -55,6 +57,17 @@ Configuration files:
 
 * `/etc/proxy-portal/deploy.env` – repo, branch, domains, SSL mode, releases to keep …
 * `/opt/proxy-portal/shared/.env` – application settings and secrets (documented in `app/.env.example`)
+
+Settings worth knowing in `shared/.env`:
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `IDENTITY_TOKEN_TTL_HOURS` | 24 | sign-in lifetime; after it the user re-enters the password (page stays) |
+| `ACCESS_TOKEN_TTL_MINUTES` | 5 | access token lifetime, renewed silently from the identity token |
+| `API_RATE_LIMIT_RPM` | 600 | portal API calls per minute per signed-in user (writes count 3×) |
+| `API_RATE_LIMIT_ANON_RPM` | 120 | the same per IP when signed out |
+| `LOG_FILE_RETENTION_DAYS` | 14 | system log files in `shared/logs/app/` |
+| `REQUEST_LOG_LEVEL` | pages | `pages` / `all` / `off` (see LOGGING.md) |
 
 ## 4. Deploy
 
@@ -99,6 +112,19 @@ sudo portal-rollback --restore-db    # also restore the DB snapshot taken before
 A rollback is a symlink swap + PM2 reload (seconds; nothing is rebuilt) and is
 health-checked; if the target is unhealthy it switches back automatically.
 
+**Upgrading a test server from a pre-release build.** Release 1 has a single new
+initial schema (`001_initial_schema.sql`: GUID ids, created/updated by on every
+table). A database created by an earlier build cannot be migrated to it; remove it
+first (test data only):
+
+```bash
+sudo -u portal -H "$(command -v pm2 || echo /usr/bin/pm2)" stop all
+sudo mkdir -p /opt/proxy-portal/shared/old-db
+sudo mv /opt/proxy-portal/shared/data/portal.db* /opt/proxy-portal/shared/old-db/
+sudo portal-deploy                       # creates a fresh database
+sudo portal-cli create-admin admin
+```
+
 **Database and rollbacks.** Migrations must stay additive (new tables, new nullable
 columns), so older code works with the newer schema and you normally do *not* need
 `--restore-db`. Use it only if a release corrupted data: it replaces the database
@@ -111,7 +137,7 @@ Deployments are started manually (or by your own script on the server). There is
 no CI deploy. Two ways to call it:
 
 ```bash
-# A) Let portal-deploy fetch from GitHub itself (REPO_URL / REPO_BRANCH in shared/.env, default main)
+# A) Let portal-deploy fetch from GitHub itself (REPO_URL / REPO_BRANCH in /etc/proxy-portal/deploy.env, default main)
 sudo portal-deploy                       # latest commit of the deploy branch
 sudo portal-deploy --ref v1.4.0          # a tag, branch or commit
 
@@ -122,6 +148,7 @@ sudo portal-deploy --source /srv/Automations
 
 Either way you get the same safety net: tests run first, the database is backed
 up, the new release is health-checked, and a failed deploy rolls back by itself.
+Every deploy, failure and rollback also appears in Admin → Activity log (source *Deploy*).
 `portal-deploy` exits non-zero on failure, so your script can stop or alert on it.
 To let a non-root deploy user run it, allow only these two commands
 (`sudo visudo -f /etc/sudoers.d/portal-deploy`):

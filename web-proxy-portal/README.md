@@ -9,9 +9,11 @@ pages.
 **Features:** sign-up with admin approval, sign-in by password or access code,
 admin proxy pools shared with everyone or with chosen users, users' own proxies
 ("My proxies"), sticky upstream per session with health checks and failover,
-site tiles, injected scripts, per-user limits, usage logs, admin panel, and
-**error reports that record the steps before every failure** (with a reference the
-user can quote). Designed
+site tiles, injected scripts, per-user limits, an address bar that also searches
+(Google, DuckDuckGo, Bing or custom), JWT sign-in (24 h identity token + 5-minute
+access tokens renewed silently), an activity log of every action with the user's
+browser/device, **error reports that record the steps before every failure** (with
+a reference the user can quote), and a System / Light / Dark theme. Designed
 mobile-first for iPhone Safari.
 
 Built on **[Rammerhead](https://github.com/binary-person/rammerhead)**, a server-side
@@ -41,16 +43,16 @@ web-proxy-portal/
 ├── README.md                ← you are here
 ├── docs/
 │   ├── ARCHITECTURE.md      how it works, security model, request flow
-│   ├── DEPLOYMENT.md        server setup, deploy, rollback, CI, troubleshooting
+│   ├── DEPLOYMENT.md        server setup, deploy, rollback, deploying from your own script, troubleshooting
 │   ├── ADMIN-GUIDE.md       users, approvals, proxy pools, sites, scripts, settings
 │   ├── TESTING.md           unit, real-engine and Playwright browser tests
-│   ├── LOGGING.md           error reports with the user's steps, activity log, server logs
+│   ├── LOGGING.md           activity log, request log, error reports, server health, system log files
 ├── app/                     the Node.js application
 │   ├── src/
 │   │   ├── config/          env loading (.env) + validation
-│   │   ├── db/              SQLite connection, migrations/*.sql
-│   │   ├── lib/             crypto, signed tokens, domain matching, tunnels, rate limiter
-│   │   ├── services/        business logic: users, pools, sites, scripts, sessions, usage, settings
+│   │   ├── db/              SQLite connection, statement cache, insert/audit helpers, migrations/001_initial_schema.sql
+│   │   ├── lib/             JWT + tokens, GUIDs, request context, time zones, logger, user-agent parser, paging, rate limiter
+│   │   ├── services/        business logic: users, pools, sites, scripts, sessions, usage, settings, events, search, devices
 │   │   ├── jobs/            proxy health checks, DB maintenance
 │   │   ├── web/             PORTAL process: Express server, routes, middleware, public/ (HTML/CSS/JS)
 │   │   ├── proxy/           ENGINE process: Rammerhead wiring, guard, upstream, SOCKS bridge, routes
@@ -69,7 +71,7 @@ web-proxy-portal/
     ├── backup.sh            daily DB + config backup
     ├── tools/               portal-cli, portal-restart, portal-logs
     ├── lib/common.sh        shared shell helpers
-    ├── templates/           nginx configs
+    ├── templates/           nginx configs (site, TLS, upstream, gzip snippets)
     └── config/deploy.env.example
 ```
 
@@ -122,6 +124,6 @@ npm run start:web           # http://localhost:3000
 git clone https://github.com/binary-person/rammerhead.git vendor/rammerhead
 (cd vendor/rammerhead && git checkout "$(grep COMMIT= ../../rammerhead.lock | cut -d= -f2)" && npm install && npm run build)
 npm run start:proxy         # 127.0.0.1:8080 / 8081
-npm test                    # 35 tests; the engine test runs when vendor/rammerhead is built
+npm test                    # 70 tests; the engine test runs when vendor/rammerhead is built
 npm run e2e                 # Playwright browser journey (see docs/TESTING.md)
 ```
