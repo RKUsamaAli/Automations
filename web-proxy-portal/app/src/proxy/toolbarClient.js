@@ -67,12 +67,12 @@ function toolbarScript(cfg, page) {
     '.addr{flex:1;min-width:0;height:100%;border:0;background:none;outline:none;font:13px/1 -apple-system,system-ui,sans-serif;color:inherit;padding:0 8px}' +
     '.go{height:26px;padding:0 12px;border-radius:999px;border:0;background:#2453d4;color:#fff;font-weight:600}' +
     '.chip{flex:none;display:flex;align-items:center;gap:6px;height:34px;max-width:46vw;padding:0 8px 0 10px;border:1px solid #dfe2e7;border-radius:999px;background:#fff}.chip:hover{background:#f6f7f9}.chip svg{width:14px;height:14px;flex:none}' +
-    '.chip .clk{flex:none;font:12px/1 ui-monospace,Menlo,monospace;color:#6b7380;padding-left:6px;border-left:1px solid #dfe2e7}.chip .clk:empty{display:none}' +
+    '.chip .f:empty{display:none}.chip .clk{flex:none;font:12px/1 ui-monospace,Menlo,monospace;color:#6b7380;padding-left:6px;border-left:1px solid #dfe2e7}.chip .clk:empty{display:none}' +
     '.chip .t{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:600 12px/1 ui-monospace,Menlo,monospace}' +
     '.d{display:inline-block;width:8px;height:8px;border-radius:50%;background:#9aa5b3;flex:none}.d.ok{background:#16a34a}.d.warn{background:#f59e0b}.d.bad{background:#dc2626}.d.off{background:#9aa5b3}' +
     '.working .chip .d{background:#f59e0b;animation:pp-pulse 1s ease-in-out infinite}@keyframes pp-pulse{50%{opacity:.35}}@keyframes pp-spin{to{transform:rotate(360deg)}}' +
     '.menu{position:fixed;right:8px;top:' + (BAR_H + 6) + 'px;width:min(340px,calc(100vw - 16px));max-height:calc(100vh - ' + (BAR_H + 20) + 'px);overflow:auto;background:#fff;color:#1b1f24;border:1px solid #dfe2e7;border-radius:14px;box-shadow:0 12px 36px rgba(15,20,40,.28);padding:10px;font:13px/1.45 -apple-system,system-ui,"Segoe UI",sans-serif}' +
-    '.sec+.sec{margin-top:10px;padding-top:10px;border-top:1px solid #eef0f3}.h{font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#6b7380;margin:0 0 6px;display:flex;justify-content:space-between;align-items:center}' +
+    '.sec+.sec,.note+.sec{margin-top:10px;padding-top:10px;border-top:1px solid #eef0f3}.h{font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#6b7380;margin:0 0 6px;display:flex;justify-content:space-between;align-items:center}' +
     '.conn{display:grid;gap:3px}.row{display:flex;gap:8px;align-items:center}.ip{font:600 15px/1.3 ui-monospace,Menlo,monospace}.muted{color:#6b7380;font-size:12px}.mono{font-family:ui-monospace,Menlo,monospace}' +
     '.list{display:grid;grid-template-columns:minmax(0,1fr);gap:2px}.item{display:flex;gap:8px;align-items:center;width:100%;min-width:0;text-align:left;border:0;background:none;padding:7px 8px;border-radius:8px}' +
     '.item:hover,.item:focus-visible{background:#f3f5f8;outline:none}.item.sel{background:#eef2ff;font-weight:600}.item[disabled]{opacity:.5;cursor:not-allowed}.item .grow{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
@@ -82,7 +82,7 @@ function toolbarScript(cfg, page) {
     '.note{margin:6px 0 0;padding:8px;border-radius:8px;background:#fde4e4;color:#a32020;font-size:12px}' +
     '.filter{width:100%;height:32px;padding:0 9px;margin-bottom:6px;border:1px solid #dfe2e7;border-radius:8px;background:#fff;outline:none;font:inherit}' +
     '.tab{position:fixed;top:0;right:16px;height:22px;padding:0 10px;border:1px solid #dfe2e7;border-top:0;border-radius:0 0 10px 10px;background:#fff;color:#2453d4;display:flex;align-items:center;gap:6px;box-shadow:0 2px 6px rgba(15,20,40,.12);font:600 12px/1 -apple-system,system-ui,sans-serif}.tab svg{width:14px;height:14px}' +
-    '@media (max-width:560px){.bar{gap:5px;padding:0 6px}.chip .t{max-width:20vw}.go{padding:0 9px}}' +
+    '@media (max-width:560px){.bar{gap:4px;padding:0 4px}.chip{padding:0 6px 0 8px;gap:4px}.chip .t{display:none}.chip .clk{border:0;padding:0}.chip.direct .t{display:inline}.go{padding:0 9px}form{padding-left:8px}.addr{padding:0 6px}.ib{width:30px}}' +
     '@media (prefers-color-scheme:dark){.bar,.menu,.tab,.chip{background:#1b1f26;color:#e7eaee;border-color:#2f3540}.chip .clk{border-color:#343b46;color:#9aa5b3}form{background:#14171c;border-color:#343b46}form:focus-within{background:#14171c}.ib:hover,.chip:hover,.item:hover,.item:focus-visible,.sm:hover{background:#262c35}.ib{color:#7da2ff}.item.sel{background:#26304a}.sec+.sec{border-color:#2a2f38}.muted,.h{color:#9aa5b3}.filter{background:#14171c;border-color:#343b46;color:#e7eaee}.score{background:#2a2f38;color:#9aa5b3}.score.good{background:#17361b;color:#7fd487}.score.fair{background:#3a2c0c;color:#ffc766}.score.poor{background:#3d1717;color:#ff8a8a}.go{background:#4c7dff}}';
 
   function mount() {
@@ -94,7 +94,7 @@ function toolbarScript(cfg, page) {
       '<div class="bar" role="toolbar" aria-label="Portal toolbar">' +
         '<button type="button" class="ib home-btn" aria-label="Back to portal" title="Back to portal">' + I.home + '</button>' +
         '<form class="go-form" role="search">' + I.search + '<input class="addr" type="search" enterkeyhint="go" placeholder="Search or type a web address" aria-label="Search or type a web address" autocomplete="off" autocapitalize="none" spellcheck="false"><button class="go" type="submit">Go</button></form>' +
-        '<button type="button" class="chip" aria-haspopup="dialog" aria-expanded="false" aria-label="Connection and proxy"><span class="d"></span><span class="t">…</span><span class="clk" aria-label="Local time of the connection"></span>' + I.down + '</button>' +
+        '<button type="button" class="chip" aria-haspopup="dialog" aria-expanded="false" aria-label="Connection and proxy"><span class="d"></span><span class="f"></span><span class="t">…</span><span class="clk" aria-label="Local time of the connection"></span>' + I.down + '</button>' +
         '<button type="button" class="ib muted collapse" aria-label="Hide the bar" title="Hide the bar">' + I.up + '</button>' +
       '</div>' +
       '<button type="button" class="tab" aria-label="Show the portal bar" hidden>' + I.down + 'Portal</button>' +
@@ -125,7 +125,9 @@ function toolbarScript(cfg, page) {
     setInterval(tick, 15000);
     function renderChip(c) {
       chip.querySelector('.d').className = 'd ' + tone(c);
-      chip.querySelector('.t').textContent = c.direct ? ('No proxy' + (c.countryCode ? ' ' + flag(c.countryCode) : '')) : (flag(c.countryCode) + ' ' + (c.exitIp || c.label)).trim();
+      chip.classList.toggle('direct', !!c.direct);
+      chip.querySelector('.f').textContent = flag(c.countryCode);
+      chip.querySelector('.t').textContent = c.direct ? 'No proxy' : (c.exitIp || c.label);
       chip.title = c.direct ? 'No proxy: the server connection' + (c.exitIp ? ' (' + c.exitIp + ')' : '') : c.label + (c.exitIp ? ' → ' + c.exitIp : '');
       clockTz = c.timeZone || null;
       tick();

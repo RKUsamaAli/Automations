@@ -59,10 +59,35 @@ The session then stays on one proxy (sticky) until it ends. If that proxy dies a
 | When no healthy proxy | Refuse | `Connect directly` would use (and expose) the server's IP |
 | Failover | on | Move a session to another proxy of its pool if its proxy dies |
 | Lock session to IP | off | Breaks phones switching Wi-Fi ↔ 4G/5G |
-| Search engine | Google | What words typed in the Browse address bar search with: Google, DuckDuckGo, Bing or Custom (results URL with `{q}`, optional suggestions URL returning OpenSearch JSON). With the allowlist on, add the engine's domain to the extra domains |
+| Allow browsing without a proxy | On | On: sessions use the server's own internet connection unless the user turns the proxy switch on (Browse page, or "No proxy (direct)" in the top bar). Off: every session must use a proxy |
+| Search engine | Google | What words typed in the Browse search box or the top bar search with. Google: results are read by the server's headless browser (through the chosen proxy) and shown as a results page; if Google answers with a CAPTCHA the results come from DuckDuckGo with a note. DuckDuckGo, Bing or Custom (results URL with `{q}`, optional suggestions URL returning OpenSearch JSON). With the allowlist on, add the engine's domain to the extra domains |
 | Suggest search terms | on | The address bar asks the engine for suggestions while typing (cached 10 min) |
 
 Changes apply within a few seconds without restarting anything.
+
+## Top bar on proxied pages
+
+Every page opened through the portal gets a thin bar at the top (users can
+collapse it to a small tab, or turn it off on their Account page):
+
+- **Globe** - back to the portal.
+- **Search / address field** - shows the page that is open. Type another
+  address to go there, or words to search (Google results via the server's
+  browser, through the session's proxy). Everything stays in the same session.
+- **Connection chip** - status dot, country flag, exit IP and the **local time
+  where the connection comes out** (the proxy's time zone, or the server's own
+  for "No proxy"). Tap it for location, ISP, speed, score, a *Check* button and
+  the list to switch to another proxy or to *No proxy (direct)*.
+
+Check Google search from the server at any time:
+
+```bash
+sudo portal-cli test-search "weather madrid"              # no proxy
+sudo portal-cli test-search "weather madrid" "My pool"    # through a pool's proxy
+```
+
+Google may answer datacenter proxies with a CAPTCHA; the search then falls
+back to DuckDuckGo and says so above the results. Residential proxies work best.
 
 ## Scripts
 

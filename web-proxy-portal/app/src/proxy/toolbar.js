@@ -191,6 +191,7 @@ function setupToolbarRoutes(proxyServer) {
             name: pool.name,
             proxies: pool.proxies.map((x) => ({
                 id: x.id,
+                direct: !!x.direct,
                 label: x.label,
                 status: x.enabled ? x.status : 'disabled',
                 usable: x.usable,
