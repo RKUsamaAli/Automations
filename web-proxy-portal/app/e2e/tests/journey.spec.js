@@ -165,6 +165,13 @@ test.describe.serial('full product journey', () => {
             await expect(phone.getByRole('button', { name: new RegExp(siteName) })).toBeVisible({ timeout: 1000 });
         }).toPass({ timeout: 10000 });
         await shot(phone, '10-browse-iphone');
+        // address bar suggests the admin's sites while typing
+        await phone.locator('#url').fill('Demo');
+        await expect(phone.getByRole('option', { name: new RegExp(siteName) })).toBeVisible();
+        await shot(phone, '10b-browse-suggestions-iphone', { fullPage: false });
+        await phone.locator('#url').press('Escape');
+        await expect(phone.getByRole('listbox')).toBeHidden();
+        await phone.locator('#url').fill('');
     });
 
     test('tapping the site opens it THROUGH the admin proxy, with the injected script', async () => {
@@ -315,6 +322,25 @@ test.describe.serial('full product journey', () => {
             await expect(admin.locator('#req-list .lazy-status')).toHaveText(/^All .* shown$/, { timeout: 500 });
         }).toPass({ timeout: 20000 });
         await expect(rows).toHaveCount(total); // every row exactly once, nothing skipped
+        // search suggests users and sites; picking a user filters by that user (removable chip)
+        await admin.locator('#rq').fill(user.name.slice(0, 6));
+        const opt = admin.getByRole('option', { name: new RegExp(user.name) });
+        await expect(opt).toBeVisible();
+        await expect(admin.getByRole('group', { name: 'Users' })).toBeVisible();
+        await admin.locator('#rkind').selectOption('');
+        await admin.locator('#rq').fill(user.name.slice(0, 6));
+        await expect(opt).toBeVisible();
+        await admin.evaluate(() => window.scrollTo(0, 0));
+        await shot(admin, '18f-admin-requests-suggestions', { fullPage: false });
+        await opt.click();
+        await expect(admin.locator('#req-chips')).toContainText('User: ' + user.name);
+        await expect(async () => {
+            const names = await admin.locator('#req-list tbody tr td:nth-child(2)').allTextContents();
+            expect(names.length).toBeGreaterThan(0);
+            expect(new Set(names)).toEqual(new Set([user.name]));
+        }).toPass({ timeout: 5000 });
+        await admin.getByRole('button', { name: 'Remove filter User: ' + user.name }).click();
+        await expect(admin.locator('#req-chips')).toBeEmpty();
         await admin.locator('#req-list .lazy-foot').scrollIntoViewIfNeeded();
         await shot(admin, '18e-admin-requests-scrolled', { fullPage: false });
     });

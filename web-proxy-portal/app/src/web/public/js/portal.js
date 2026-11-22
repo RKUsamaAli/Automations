@@ -5,6 +5,7 @@
     var esc = P.esc;
     var goError = P.$('#go-error');
     var poolsById = {};
+    var siteList = [];
 
     function selectedPool() {
         var v = P.$('#pool').value;
@@ -42,6 +43,23 @@
     });
     P.$('#refresh').addEventListener('click', loadSessions);
 
+    // Address bar suggestions: the admin's site tiles + pages this user opened before.
+    // Picking one opens it straight away.
+    P.suggest(P.$('#url'), {
+        source: function (q) {
+            var sites = P.filterOptions(siteList.map(function (s) { return { value: s.startUrl, label: s.name, hint: s.host, siteId: s.id }; }), q, 5);
+            return P.api('GET', '/api/portal/recent?q=' + encodeURIComponent(q)).then(function (recent) {
+                var known = {};
+                sites.forEach(function (s) { known[s.hint] = true; });
+                return [{ label: 'Your sites', items: sites }, { label: 'Recently opened', items: recent.filter(function (r) { return !known[r.label] && !known['www.' + r.label]; }) }];
+            });
+        },
+        onPick: function (item) {
+            P.$('#url').value = item.value;
+            browse(item.siteId ? { siteId: item.siteId } : { url: item.value }, P.$('#go'));
+        }
+    });
+
     async function loadPools() {
         var pools = await P.api('GET', '/api/portal/pools');
         var select = P.$('#pool');
@@ -64,6 +82,7 @@
 
     async function loadSites() {
         var sites = await P.api('GET', '/api/portal/sites');
+        siteList = sites;
         var box = P.$('#sites');
         P.$('#sites-card').classList.toggle('hidden', !sites.length);
         var chevron = '<svg class="icon chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>';

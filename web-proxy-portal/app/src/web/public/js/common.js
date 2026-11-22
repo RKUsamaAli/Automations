@@ -288,10 +288,176 @@
         return info;
     }
 
+    // ============================================================ suggest ==
+    /**
+     * Type-ahead suggestions for an <input> (ARIA 1.2 combobox pattern).
+     *
+     *   Portal.suggest(input, {
+     *       source: async function (q) { return [{ label: 'Users', items: [{ value, label, hint }] }]; },
+     *       onPick: function (item, group) {},   // default: put item.value in the box
+     *       tokens: true,                        // comma-separated lists ("a.com, b.com")
+     *       openOnFocus: true                    // show options before typing
+     *   });
+     *
+     * Keyboard: Down/Up move, Enter picks, Escape closes, Tab leaves.
+     * Typing anything that is not in the list still works - suggestions
+     * never block free text.
+     */
+    var suggestSeq = 0;
+    function suggest(input, opts) {
+        opts = opts || {};
+        var id = 'sg' + (++suggestSeq);
+        var wrap = document.createElement('div');
+        wrap.className = 'suggest-wrap';
+        input.parentNode.insertBefore(wrap, input);
+        wrap.appendChild(input);
+        var list = document.createElement('div');
+        list.className = 'suggest hidden';
+        list.id = id;
+        list.setAttribute('role', 'listbox');
+        list.setAttribute('aria-label', (input.getAttribute('aria-label') || input.placeholder || 'Suggestions'));
+        wrap.appendChild(list);
+        input.setAttribute('role', 'combobox');
+        input.setAttribute('aria-autocomplete', 'list');
+        input.setAttribute('aria-expanded', 'false');
+        input.setAttribute('aria-controls', id);
+        input.setAttribute('autocomplete', 'off');
+
+        var options = [];   // [{ el, item, group }]
+        var active = -1;
+        var reqNo = 0;
+        var timer = null;
+
+        function term() {
+            if (!opts.tokens) return input.value.trim();
+            var parts = input.value.split(',');
+            return parts[parts.length - 1].trim();
+        }
+        function mark(text, q) {
+            text = String(text == null ? '' : text);
+            var i = q ? text.toLowerCase().indexOf(q.toLowerCase()) : -1;
+            if (i < 0) return esc(text);
+            return esc(text.slice(0, i)) + '<mark>' + esc(text.slice(i, i + q.length)) + '</mark>' + esc(text.slice(i + q.length));
+        }
+        function close() {
+            list.classList.add('hidden');
+            input.setAttribute('aria-expanded', 'false');
+            input.removeAttribute('aria-activedescendant');
+            active = -1;
+        }
+        function setActive(i) {
+            if (active >= 0 && options[active]) options[active].el.classList.remove('active');
+            active = i;
+            if (i < 0 || !options[i]) { input.removeAttribute('aria-activedescendant'); return; }
+            options[i].el.classList.add('active');
+            options[i].el.scrollIntoView({ block: 'nearest' });
+            input.setAttribute('aria-activedescendant', options[i].el.id);
+        }
+        function render(groups, q) {
+            if (!Array.isArray(groups)) groups = [];
+            if (groups.length && !groups[0].items) groups = [{ items: groups }];
+            groups = groups.filter(function (g) { return g.items && g.items.length; });
+            options = [];
+            active = -1;
+            if (!groups.length) {
+                if (q && opts.emptyText) {
+                    list.innerHTML = '<div class="suggest-empty">' + esc(opts.emptyText) + '</div>';
+                    list.classList.remove('hidden');
+                    input.setAttribute('aria-expanded', 'true');
+                } else close();
+                return;
+            }
+            list.innerHTML = '';
+            groups.forEach(function (g, gi) {
+                var box = list;
+                if (g.label) {
+                    box = document.createElement('div');
+                    box.setAttribute('role', 'group');
+                    box.setAttribute('aria-labelledby', id + '-g' + gi);
+                    box.innerHTML = '<div class="suggest-group" id="' + id + '-g' + gi + '">' + esc(g.label) + '</div>';
+                    list.appendChild(box);
+                }
+                g.items.forEach(function (item) {
+                    var el = document.createElement('div');
+                    el.className = 'suggest-option';
+                    el.id = id + '-o' + options.length;
+                    el.setAttribute('role', 'option');
+                    el.innerHTML = '<span class="suggest-label">' + mark(item.label, q) + '</span>' + (item.hint ? '<span class="suggest-hint">' + mark(item.hint, q) + '</span>' : '');
+                    var index = options.length;
+                    // mousedown, not click: keeps focus in the input
+                    el.addEventListener('mousedown', function (e) { e.preventDefault(); pick(index); });
+                    box.appendChild(el);
+                    options.push({ el: el, item: item, group: g });
+                });
+            });
+            list.classList.remove('hidden');
+            input.setAttribute('aria-expanded', 'true');
+        }
+        function pick(i) {
+            var o = options[i];
+            if (!o) return;
+            close();
+            if (opts.onPick) { opts.onPick(o.item, o.group); return; }
+            if (opts.tokens) {
+                var parts = input.value.split(',').map(function (x) { return x.trim(); });
+                parts[parts.length - 1] = o.item.value;
+                input.value = parts.filter(Boolean).join(', ') + ', ';
+            } else input.value = o.item.value;
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        function refresh() {
+            var q = term();
+            var my = ++reqNo;
+            Promise.resolve(opts.source(q)).then(function (groups) {
+                if (my !== reqNo || document.activeElement !== input) return; // stale or focus left
+                render(groups, q);
+            }).catch(function () { close(); });
+        }
+        input.addEventListener('input', function () {
+            clearTimeout(timer);
+            timer = setTimeout(refresh, 150);
+        });
+        input.addEventListener('focus', function () { if (opts.openOnFocus !== false) refresh(); });
+        input.addEventListener('blur', function () { setTimeout(close, 100); });
+        input.addEventListener('keydown', function (e) {
+            var open = !list.classList.contains('hidden');
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                if (!open) return refresh();
+                setActive(Math.min(active + 1, options.length - 1));
+            } else if (e.key === 'ArrowUp') {
+                if (!open) return;
+                e.preventDefault();
+                setActive(Math.max(active - 1, 0));
+            } else if (e.key === 'Enter' && open && active >= 0) {
+                e.preventDefault();
+                pick(active);
+            } else if (e.key === 'Escape' && open) {
+                e.preventDefault();
+                e.stopPropagation(); // do not close the surrounding drawer
+                close();
+            }
+        });
+        return { refresh: refresh, close: close };
+    }
+
+    /** Filters a fixed option list on the client: [{ value, label, hint }]. */
+    function filterOptions(items, q, limit) {
+        q = String(q || '').toLowerCase();
+        var starts = [], contains = [];
+        items.forEach(function (it) {
+            var text = (it.label + ' ' + (it.hint || '') + ' ' + it.value).toLowerCase();
+            if (!q || String(it.label).toLowerCase().indexOf(q) === 0 || String(it.value).toLowerCase().indexOf(q) === 0) starts.push(it);
+            else if (text.indexOf(q) !== -1) contains.push(it);
+        });
+        return starts.concat(contains).slice(0, limit || 8);
+    }
+
     window.Portal = {
         api: api, esc: esc, $: $, $all: $all, toast: toast, showError: showError, busy: busy,
         formatBytes: formatBytes, timeAgo: timeAgo, formatDate: formatDate, colorFor: colorFor,
         confirm: confirmDialog, setupReveal: setupReveal, icon: icon, shell: shell, loadMe: loadMe, logout: logout,
-        reportError: reportError, crumb: crumb
+        reportError: reportError, crumb: crumb, suggest: suggest, filterOptions: filterOptions
     };
 })();

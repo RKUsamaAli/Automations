@@ -18,6 +18,7 @@
 const express = require('express');
 const config = require('../../config');
 const sites = require('../../services/sites');
+const suggest = require('../../services/suggest');
 const sessions = require('../../services/sessions');
 const pools = require('../../services/pools');
 const healthCheck = require('../../jobs/healthCheck');
@@ -71,6 +72,11 @@ router.get('/pools', (req, res) => {
             total: p.proxy_count
         }))
     );
+});
+
+// Address-bar suggestions: the user's recently opened pages.
+router.get('/recent', (req, res) => {
+    res.json(suggest.recentUrls(req.user.id, req.query.q || ''));
 });
 
 router.get('/sessions', (req, res) => {

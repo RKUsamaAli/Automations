@@ -31,6 +31,7 @@ const events = require('../../services/events');
 const healthCheck = require('../../jobs/healthCheck');
 const config = require('../../config');
 const errorReports = require('../../services/errorReports');
+const suggest = require('../../services/suggest');
 const requestLog = require('../../services/requestLog');
 const metrics = require('../../services/metrics');
 const { isBug } = require('../../lib/errors');
@@ -84,6 +85,30 @@ router.get(
  *   { items, nextCursor, summary }   (summary only on the first batch)
  * Without it the old plain-array answer is kept (CSV, pickers, scripts).
  */
+// ------------------------------------------------------- suggestions ----
+// One endpoint for every type-ahead box: ?field=users|hosts|domains|proxyHosts|errors&q=
+router.get(
+    '/suggest',
+    h((req) => {
+        const q = req.query.q || '';
+        switch (req.query.field) {
+            case 'users':
+                return suggest.users(q);
+            case 'hosts':
+                return suggest.hosts(q);
+            case 'domains':
+                return suggest.domainPatterns(q);
+            case 'proxyHosts':
+                return suggest.proxyHosts(Number(req.query.pool), q);
+            case 'errors':
+                // reference numbers first, then sites with errors, then users
+                return { refs: suggest.errorRefs(q), hosts: suggest.hosts(q, { limit: 4 }), users: suggest.users(q, { limit: 4 }) };
+            default:
+                throw new Error('Unknown suggestion field');
+        }
+    })
+);
+
 const isPaged = (req) => req.query.paged === '1' || req.query.paged === 'true';
 function paged(req, pageFn, summaryFn) {
     const opts = { cursor: req.query.cursor || null, limit: req.query.limit };
@@ -280,7 +305,14 @@ router.put(
 );
 
 // ------------------------------------------------------ sessions & logs ----
-router.get('/sessions', h((req) => (isPaged(req) ? paged(req, (o) => sessions.pageActive(o), () => sessions.activeSummary()) : sessions.listActive())));
+router.get(
+    '/sessions',
+    h((req) => {
+        if (!isPaged(req)) return sessions.listActive();
+        const userId = Number(req.query.user) || null;
+        return paged(req, (o) => sessions.pageActive({ ...o, userId }), () => sessions.activeSummary({ userId }));
+    })
+);
 router.post(
     '/sessions/:id/end',
     h((req) => {

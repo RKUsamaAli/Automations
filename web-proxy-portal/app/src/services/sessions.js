@@ -70,13 +70,17 @@ function listActive(limit = 200) {
 }
 
 /** One lazy-loaded batch of active sessions, most recently used first. Cursor = (last_seen_at, id). */
-function pageActive({ cursor = null, limit } = {}) {
+function pageActive({ cursor = null, limit, userId = null } = {}) {
     const n = paging.limitOf(limit);
     const after = paging.decodeCursor(cursor);
     const args = [];
     let extra = '';
+    if (userId) {
+        extra += ' AND s.user_id = ?';
+        args.push(Number(userId));
+    }
     if (after) {
-        extra = 'AND (s.last_seen_at < ? OR (s.last_seen_at = ? AND s.id < ?))';
+        extra += ' AND (s.last_seen_at < ? OR (s.last_seen_at = ? AND s.id < ?))';
         args.push(Number(after[0]), Number(after[0]), String(after[1]));
     }
     args.push(n + 1);
@@ -94,16 +98,16 @@ function pageActive({ cursor = null, limit } = {}) {
     return paging.toPage(rows, n, (r) => [r.last_seen_at, r.id]);
 }
 
-/** Totals over ALL active sessions. */
-function activeSummary() {
+/** Totals over ALL active sessions (optionally of one user). */
+function activeSummary({ userId = null } = {}) {
     const r = db
         .get()
         .prepare(
             `SELECT COUNT(*) AS total, COUNT(DISTINCT user_id) AS users, SUM(requests) AS requests, SUM(bytes) AS bytes,
                     SUM(CASE WHEN end_requested = 1 THEN 1 ELSE 0 END) AS ending
-             FROM sessions WHERE ended_at IS NULL`
+             FROM sessions WHERE ended_at IS NULL ${userId ? 'AND user_id = ?' : ''}`
         )
-        .get();
+        .get(...(userId ? [Number(userId)] : []));
     return { total: r.total, users: r.users, requests: r.requests || 0, bytes: r.bytes || 0, ending: r.ending || 0 };
 }
 

@@ -159,6 +159,24 @@
         load(); // first batch right away; the observer asks for the rest
         return self;
     }
+    // ========================================================= suggestions ==
+    /** Server-side suggestions: /api/admin/suggest?field=... */
+    function fromServer(field, extra) {
+        return function (q) { return P.api('GET', '/api/admin/suggest?field=' + field + '&q=' + encodeURIComponent(q) + (extra || '')); };
+    }
+    /** "User: alice x" style chip; `attr` marks its remove button. */
+    function chip(label, attr) {
+        return '<span class="chip">' + esc(label) + '<button type="button" ' + attr + ' aria-label="Remove filter ' + esc(label) + '">×</button></span>';
+    }
+    var COUNTRIES = ('US United States|GB United Kingdom|CA Canada|AU Australia|DE Germany|FR France|NL Netherlands|ES Spain|IT Italy|SE Sweden|' +
+        'NO Norway|DK Denmark|FI Finland|IE Ireland|CH Switzerland|AT Austria|BE Belgium|PL Poland|PT Portugal|CZ Czechia|' +
+        'RO Romania|GR Greece|TR Turkey|UA Ukraine|RU Russia|AE United Arab Emirates|SA Saudi Arabia|QA Qatar|IL Israel|EG Egypt|' +
+        'ZA South Africa|NG Nigeria|KE Kenya|IN India|PK Pakistan|BD Bangladesh|LK Sri Lanka|SG Singapore|MY Malaysia|ID Indonesia|' +
+        'TH Thailand|VN Vietnam|PH Philippines|JP Japan|KR South Korea|CN China|HK Hong Kong|TW Taiwan|NZ New Zealand|BR Brazil|' +
+        'MX Mexico|AR Argentina|CL Chile|CO Colombia|PE Peru').split('|').map(function (x) {
+        return { value: x.slice(0, 2), label: x.slice(0, 2), hint: x.slice(3) };
+    });
+
     /** Compact one-line summary: [[label, value, tone?], ...]. */
     function summaryBar(items) {
         return '<div class="summary-bar">' + items.filter(Boolean).map(function (i) {
@@ -289,7 +307,9 @@
             if (f.type === 'info') return '<div class="field">' + f.html + '</div>';
             if (f.type === 'checkbox') return '<label class="check"><input type="checkbox" id="' + id + '"' + (val ? ' checked' : '') + described + '> <span>' + esc(f.label) + '</span></label>' + hint;
             if (f.type === 'users') {
-                return '<fieldset class="plain-fieldset"><legend>' + esc(f.label) + '</legend><div class="user-picker" id="' + id + '">' +
+                return '<fieldset class="plain-fieldset"><legend>' + esc(f.label) + '</legend>' +
+                    (f.options.length > 6 ? '<input type="search" class="picker-filter" data-picker-filter="' + id + '" placeholder="Find user" aria-label="Find user">' : '') +
+                    '<div class="user-picker" id="' + id + '">' +
                     (f.options.length ? f.options.map(function (o) {
                         return '<label class="check"><input type="checkbox" value="' + o.value + '"' + (f.value.indexOf(o.value) !== -1 ? ' checked' : '') + '> <span>' + esc(o.label) + '</span></label>';
                     }).join('') : '<span class="muted">No users yet.</span>') + '</div>' + hint + '</fieldset>';
@@ -311,6 +331,17 @@
         P.$('#modal-body').innerHTML = '<form id="modal-form" class="drawer-content" novalidate><div class="drawer-body">' + html + '</div>' +
             '<div class="drawer-foot"><button type="button" id="modal-cancel">Cancel</button><button type="submit" class="primary" id="modal-submit">' + esc(cfg.submitLabel || 'Save') + '</button></div></form>';
         P.$('#modal-cancel').addEventListener('click', closeModal);
+        // Fields with known answers offer them as you type (free text still allowed).
+        cfg.fields.forEach(function (f) { if (f.suggest) P.suggest(P.$('#f-' + f.name), f.suggest); });
+        // Long user lists get a "Find user" box that narrows the checkboxes.
+        P.$all('[data-picker-filter]').forEach(function (box) {
+            box.addEventListener('input', function () {
+                var q = box.value.trim().toLowerCase();
+                P.$all('label', P.$('#' + box.getAttribute('data-picker-filter'))).forEach(function (l) {
+                    l.classList.toggle('hidden', !!q && l.textContent.toLowerCase().indexOf(q) === -1);
+                });
+            });
+        });
         var first = P.$('#modal-form input:not([type=checkbox]), #modal-form textarea, #modal-form select');
         if (first && window.matchMedia('(pointer: fine)').matches) first.focus();
 
@@ -454,6 +485,7 @@
             clearTimeout(qt);
             qt = setTimeout(function () { userFilter.q = e.target.value.trim(); loadList(); }, 300);
         });
+        P.suggest(P.$('#uq'), { source: fromServer('users'), emptyText: 'No matching users' });
 
         on('[data-approve]', 'click', async function (btn) {
             try {
@@ -568,7 +600,7 @@
             fields: [
                 { name: 'name', label: 'Name', value: p && p.name, placeholder: 'US residential' },
                 { name: 'type', label: 'Type', type: 'select', value: p ? p.type : 'residential', options: state.poolTypes.map(function (t) { return { value: t, label: t.charAt(0).toUpperCase() + t.slice(1) }; }) },
-                { name: 'country', label: 'Country tag', value: p && p.country, placeholder: 'US' },
+                { name: 'country', label: 'Country tag', value: p && p.country, placeholder: 'Type a country, e.g. United States', suggest: { source: function (q) { return P.filterOptions(COUNTRIES, q, 8); } } },
                 { name: 'visibility', label: 'Who can use this pool', type: 'select', value: p ? p.visibility : 'all', options: [{ value: 'all', label: 'All users' }, { value: 'assigned', label: 'Only users I assign' }], hint: 'With "Only users I assign", choose the users with the Users button.' },
                 { name: 'description', label: 'Description', value: p && p.description },
                 { name: 'isDefault', label: 'Default pool (used when no other rule applies)', type: 'checkbox', value: p ? !!p.is_default : state.pools.filter(function (x) { return !x.owner_user_id; }).length === 0 }
@@ -603,7 +635,7 @@
         });
     }
 
-    var proxyFilter = { status: '' };
+    var proxyFilter = { status: '', q: '' };
     function proxyRow(x) {
         return '<tr><td><span class="mono">' + esc(x.protocol + '://' + (x.username ? x.username + ':•••@' : '') + x.host + ':' + x.port) + '</span>' +
             (x.last_error && x.status !== 'healthy' ? '<div class="cell-sub">' + esc(x.last_error) + '</div>' : '') + '</td>' +
@@ -615,19 +647,19 @@
         var pool = state.pools.find(function (p) { return p.id === poolId; });
         var box = P.$('#pool-detail');
         box.innerHTML = panel(esc(pool.name),
-            '<div class="toolbar">' + selectHtml('pstatus', 'Status', proxyFilter.status, [['', 'All proxies'], ['healthy', 'Online'], ['slow', 'Slow'], ['dead', 'Offline'], ['unknown', 'Not checked'], ['disabled', 'Disabled']]) + '</div><div id="proxy-list"></div>',
+            '<div class="toolbar"><input type="search" id="pq" placeholder="Search proxy address" aria-label="Search proxies in this pool">' + selectHtml('pstatus', 'Status', proxyFilter.status, [['', 'All proxies'], ['healthy', 'Online'], ['slow', 'Slow'], ['dead', 'Offline'], ['unknown', 'Not checked'], ['disabled', 'Disabled']]) + '</div><div id="proxy-list"></div>',
             { cls: 'mt', actions: '<button type="button" class="small" id="check">Check now</button><button type="button" class="small" id="purge">Remove offline</button><button type="button" class="small primary" id="import">Import</button>' });
         function loadList() {
             lazyTable({
                 mount: P.$('#proxy-list'),
-                url: '/api/admin/pools/' + poolId + '/proxies' + (proxyFilter.status ? '?status=' + proxyFilter.status : ''),
+                url: '/api/admin/pools/' + poolId + '/proxies?status=' + proxyFilter.status + '&q=' + encodeURIComponent(proxyFilter.q),
                 headers: [{ label: 'Proxy' }, { label: 'Status' }, { label: 'Latency', num: true }, { label: 'Sessions', num: true }, { label: 'Last check' }, { label: '' }],
                 row: proxyRow,
                 empty: proxyFilter.status ? 'No proxies with this status' : 'No proxies in this pool yet. Use Import.',
                 summary: function (m) {
                     return summaryBar([['Proxies', int(m.total)], ['Online', int(m.healthy), m.healthy ? 'ok' : ''], ['Slow', int(m.slow), m.slow ? 'warn' : ''], ['Offline', int(m.dead), m.dead ? 'bad' : ''], ['Not checked', int(m.unknown)], ['Disabled', int(m.disabled)], m.avgLatency != null ? ['Avg latency', m.avgLatency + ' ms'] : null]);
                 },
-                total: function (m) { return proxyFilter.status ? m[proxyFilter.status === 'dead' ? 'dead' : proxyFilter.status] : m.total; },
+                total: function (m) { return proxyFilter.q ? null : proxyFilter.status ? m[proxyFilter.status] : m.total; },
                 actions: {
                     'data-toggle': async function (btn, value) {
                         try {
@@ -647,6 +679,13 @@
         }
         loadList();
         P.$('#pstatus').addEventListener('change', function (e) { proxyFilter.status = e.target.value; loadList(); });
+        var pt;
+        P.$('#pq').value = proxyFilter.q;
+        P.$('#pq').addEventListener('input', function (e) {
+            clearTimeout(pt);
+            pt = setTimeout(function () { proxyFilter.q = e.target.value.trim(); loadList(); }, 300);
+        });
+        P.suggest(P.$('#pq'), { source: fromServer('proxyHosts', '&pool=' + poolId), emptyText: 'No proxy with that address' });
 
         P.$('#import').addEventListener('click', function () {
             openForm({
@@ -693,13 +732,34 @@
     }
 
     // ============================================================= sessions ==
+    var sessionFilter = { user: null };
     async function sessionsView() {
         view.innerHTML = pageHead('Sessions', 'Active browsing sessions. Open the timeline to see every page a session loaded.', '<button type="button" id="reload">Refresh</button>') +
-            '<section class="panel"><div id="session-list"></div></section>';
+            '<section class="panel"><div class="toolbar"><input type="search" id="sq" placeholder="Filter by user" aria-label="Filter sessions by user"><span class="chips" id="session-chips"></span></div><div id="session-list"></div></section>';
+        function renderChips() {
+            P.$('#session-chips').innerHTML = sessionFilter.user ? chip('User: ' + sessionFilter.user.name, 'data-clear-user') : '';
+        }
+        P.$('#session-chips').addEventListener('click', function (e) {
+            if (!e.target.closest('[data-clear-user]')) return;
+            sessionFilter.user = null;
+            renderChips();
+            loadList();
+        });
+        P.suggest(P.$('#sq'), {
+            source: fromServer('users'),
+            emptyText: 'No matching users',
+            onPick: function (item) {
+                sessionFilter.user = { id: item.id, name: item.value };
+                P.$('#sq').value = '';
+                renderChips();
+                loadList();
+            }
+        });
+        renderChips();
         function loadList() {
             lazyTable({
                 mount: P.$('#session-list'),
-                url: '/api/admin/sessions',
+                url: '/api/admin/sessions' + (sessionFilter.user ? '?user=' + sessionFilter.user.id : ''),
                 headers: [{ label: 'User' }, { label: 'Start page' }, { label: 'Upstream' }, { label: 'Traffic', num: true }, { label: 'Requests', num: true }, { label: 'Last seen' }, { label: '' }],
                 row: function (s) {
                     return '<tr><td><div class="cell-main">' + esc(s.username) + '</div><div class="cell-sub mono">' + esc(s.client_ip || '') + '</div></td>' +
@@ -708,7 +768,7 @@
                         '<td class="num">' + esc(P.formatBytes(s.bytes)) + '</td><td class="num">' + int(s.requests) + '</td><td>' + time(s.last_seen_at) + '</td>' +
                         '<td class="actions"><button type="button" class="small" data-show="' + esc(s.id) + '">Timeline</button><button type="button" class="small danger" data-end="' + esc(s.id) + '">End</button></td></tr>';
                 },
-                empty: 'No active sessions',
+                empty: sessionFilter.user ? 'No active sessions for this user' : 'No active sessions',
                 summary: function (m) {
                     return summaryBar([['Active sessions', int(m.total)], ['Users', int(m.users)], ['Requests', int(m.requests)], ['Traffic', P.formatBytes(m.bytes)], m.ending ? ['Ending', int(m.ending), 'warn'] : null]);
                 },
@@ -771,8 +831,12 @@
                 title: s ? 'Edit site' : 'Add site',
                 fields: [
                     { name: 'name', label: 'Name', value: s && s.name, placeholder: 'Example' },
-                    { name: 'startUrl', label: 'Start URL', value: s && s.start_url, placeholder: 'https://www.example.com/' },
-                    { name: 'domains', label: 'Domain patterns', value: s ? s.domains : '', placeholder: '*.example.com, examplecdn.net', hint: 'Comma separated. *.example.com covers example.com and its subdomains. Include the login and CDN domains the site uses.' },
+                    { name: 'startUrl', label: 'Start URL', value: s && s.start_url, placeholder: 'https://www.example.com/', suggest: { source: function (q) {
+                        return fromServer('hosts')(q.replace(/^https?:\/\//, '').split('/')[0]).then(function (list) {
+                            return list.map(function (h) { return { value: 'https://' + h.value + '/', label: 'https://' + h.value + '/', hint: h.hint }; });
+                        });
+                    } } },
+                    { name: 'domains', label: 'Domain patterns', value: s ? s.domains : '', placeholder: '*.example.com, examplecdn.net', hint: 'Comma separated. *.example.com covers example.com and its subdomains. Include the login and CDN domains the site uses.', suggest: { tokens: true, source: fromServer('domains') } },
                     { name: 'poolId', label: 'Proxy pool', type: 'select', value: s ? s.pool_id || '' : '', options: poolOptions(true, 'Default pool') },
                     { name: 'sortOrder', label: 'Order', type: 'number', value: s ? s.sort_order : 0 },
                     { name: 'enabled', label: 'Enabled', type: 'checkbox', value: s ? !!s.enabled : true },
@@ -814,7 +878,9 @@
                 wide: true,
                 fields: [
                     { name: 'name', label: 'Name', value: s && s.name },
-                    { name: 'domains', label: 'Run on domains', value: s ? s.domains : '*', hint: 'Comma separated patterns. * = every site.' },
+                    { name: 'domains', label: 'Run on domains', value: s ? s.domains : '*', hint: 'Comma separated patterns. * = every site.', suggest: { tokens: true, source: function (q) {
+                        return fromServer('domains')(q).then(function (list) { return (!q || '*'.indexOf(q) === 0 ? [{ value: '*', label: '*', hint: 'Every site' }] : []).concat(list); });
+                    } } },
                     { name: 'runAt', label: 'Run at', type: 'select', value: s ? s.run_at : 'document-end', options: res.runAt.map(function (r) { return { value: r, label: r }; }), hint: 'document-end (recommended) runs when the page HTML is ready.' },
                     { name: 'loadOrder', label: 'Order', type: 'number', value: s ? s.load_order : 100 },
                     { name: 'enabled', label: 'Enabled', type: 'checkbox', value: s ? !!s.enabled : true },
@@ -840,11 +906,11 @@
     }
 
     // ============================================================= requests ==
-    var reqFilter = { q: '', kind: 'activity', status: '', hours: '24' };
+    var reqFilter = { q: '', kind: 'activity', status: '', hours: '24', user: null };
     function requestsView() {
         var TYPE = { page: 'Page', resource: 'Resource', api: 'API', view: 'Portal page' };
         var qs = function () {
-            return 'hours=' + reqFilter.hours + (reqFilter.q ? '&q=' + encodeURIComponent(reqFilter.q) : '') + (reqFilter.kind ? '&kind=' + reqFilter.kind : '') + (reqFilter.status ? '&status=' + reqFilter.status : '');
+            return 'hours=' + reqFilter.hours + (reqFilter.user ? '&user=' + reqFilter.user.id : '') + (reqFilter.q ? '&q=' + encodeURIComponent(reqFilter.q) : '') + (reqFilter.kind ? '&kind=' + reqFilter.kind : '') + (reqFilter.status ? '&status=' + reqFilter.status : '');
         };
         view.innerHTML = pageHead('Requests', 'What users did: pages opened through the proxy, portal actions and every failure. Successful images and scripts are only stored with REQUEST_LOG_LEVEL=all.',
             '<a class="btn" id="req-csv" href="/api/admin/requests.csv?' + qs() + '" download>Export CSV</a>') +
@@ -853,7 +919,17 @@
             selectHtml('rkind', 'Type', reqFilter.kind, [['activity', 'User activity'], ['', 'All requests'], ['page', 'Proxied pages'], ['resource', 'Proxied resources'], ['api', 'Portal API'], ['view', 'Portal pages']]) +
             selectHtml('rstatus', 'Result', reqFilter.status, [['', 'All results'], ['failed', 'Failed only'], ['ok', 'Successful only']]) +
             selectHtml('rhours', 'Time range', reqFilter.hours, RANGES) +
-            '</div><div id="req-list"></div></section>';
+            '<span class="chips" id="req-chips"></span></div><div id="req-list"></div></section>';
+        function renderChips() {
+            P.$('#req-chips').innerHTML = reqFilter.user ? chip('User: ' + reqFilter.user.name, 'data-clear-user') : '';
+        }
+        P.$('#req-chips').addEventListener('click', function (e) {
+            if (!e.target.closest('[data-clear-user]')) return;
+            reqFilter.user = null;
+            renderChips();
+            loadList();
+        });
+        renderChips();
         function loadList() {
             P.$('#req-csv').setAttribute('href', '/api/admin/requests.csv?' + qs());
             lazyTable({
@@ -881,6 +957,27 @@
             t = setTimeout(function () { reqFilter.q = e.target.value.trim(); loadList(); }, 300);
         });
         [['#rkind', 'kind'], ['#rstatus', 'status'], ['#rhours', 'hours']].forEach(function (p) { P.$(p[0]).addEventListener('change', function (e) { reqFilter[p[1]] = e.target.value; loadList(); }); });
+        // Suggestions: picking a user filters by that user (chip); picking a site searches for it.
+        P.suggest(P.$('#rq'), {
+            source: function (q) {
+                return Promise.all([fromServer('users')(q), fromServer('hosts')(q)]).then(function (r) {
+                    return [{ label: 'Users', items: r[0].slice(0, 5), kind: 'user' }, { label: 'Sites', items: r[1].slice(0, 6), kind: 'host' }];
+                });
+            },
+            onPick: function (item, group) {
+                if (group.kind === 'user') {
+                    reqFilter.user = { id: item.id, name: item.value };
+                    reqFilter.q = '';
+                    P.$('#rq').value = '';
+                    renderChips();
+                } else {
+                    reqFilter.q = item.value;
+                    P.$('#rq').value = item.value;
+                }
+                clearTimeout(t);
+                loadList();
+            }
+        });
         return Promise.resolve();
     }
 
@@ -935,6 +1032,21 @@
         q.addEventListener('input', function () {
             clearTimeout(timer);
             timer = setTimeout(function () { errorFilter.q = q.value.trim(); loadList(); }, 300);
+        });
+        var kinds = Object.keys(KIND_LABELS).filter(function (k) { return k !== 'client_promise'; }).map(function (k) { return { value: k, label: KIND_LABELS[k], hint: k }; });
+        P.suggest(q, {
+            source: function (text) {
+                return fromServer('errors')(text).then(function (r) {
+                    return [{ label: 'References', items: r.refs }, { label: 'Error types', items: P.filterOptions(kinds, text, 4) },
+                        { label: 'Sites', items: r.hosts }, { label: 'Users', items: r.users }];
+                });
+            },
+            onPick: function (item) {
+                clearTimeout(timer);
+                q.value = item.value;
+                errorFilter.q = item.value;
+                loadList();
+            }
         });
         return Promise.resolve();
     }
@@ -1052,13 +1164,14 @@
     }
 
     // ========================================================= activity log ==
-    var logFilter = { type: '' };
+    var logFilter = { type: '', user: null };
     async function logsView() {
         var usage = await P.api('GET', '/api/admin/usage?days=7');
         var types = Object.keys(EVENT_LABELS).map(function (k) { return [k, EVENT_LABELS[k]]; }).sort(function (a, b) { return a[1].localeCompare(b[1]); });
         view.innerHTML = pageHead('Activity log', 'Sign-ins, sessions, approvals, blocked sites, proxy changes, process restarts and admin actions.', '<a class="btn" href="/api/admin/events.csv" download>Export CSV</a>') +
             '<div class="grid main-side">' +
-            '<section class="panel"><div class="panel-head"><h2>Events</h2></div><div class="toolbar">' + selectHtml('etype', 'Event', logFilter.type, [['', 'All events']].concat(types)) + '</div><div id="event-list"></div></section>' +
+            '<section class="panel"><div class="panel-head"><h2>Events</h2></div><div class="toolbar">' + selectHtml('etype', 'Event', logFilter.type, [['', 'All events']].concat(types)) +
+            '<input type="search" id="eq" placeholder="Filter by user" aria-label="Filter events by user"><span class="chips" id="event-chips"></span></div><div id="event-list"></div></section>' +
             panel('Usage per user, 7 days', table([{ label: 'User' }, { label: 'Requests', num: true }, { label: 'Traffic', num: true }], usage.users.map(function (u) {
                 return '<tr><td>' + esc(u.username) + '</td><td class="num">' + int(u.requests) + '</td><td class="num">' + esc(P.formatBytes(u.bytes)) + '</td></tr>';
             }), 'No usage yet')) +
@@ -1066,7 +1179,7 @@
         function loadList() {
             lazyTable({
                 mount: P.$('#event-list'),
-                url: '/api/admin/events' + (logFilter.type ? '?type=' + encodeURIComponent(logFilter.type) : ''),
+                url: '/api/admin/events?type=' + encodeURIComponent(logFilter.type) + (logFilter.user ? '&userId=' + logFilter.user.id : ''),
                 headers: [{ label: 'Time' }, { label: 'Event' }, { label: 'User' }, { label: 'Details' }, { label: 'IP' }],
                 row: function (e) {
                     return '<tr><td>' + time(e.created_at) + '</td><td>' + eventBadge(e.type) + '</td><td>' + esc(e.username || '-') + '</td><td class="small">' + esc(e.detail || '') + '</td><td class="mono subtle">' + esc(e.ip || '') + '</td></tr>';
@@ -1079,6 +1192,26 @@
         }
         loadList();
         P.$('#etype').addEventListener('change', function (e) { logFilter.type = e.target.value; loadList(); });
+        function renderChips() {
+            P.$('#event-chips').innerHTML = logFilter.user ? chip('User: ' + logFilter.user.name, 'data-clear-user') : '';
+        }
+        P.$('#event-chips').addEventListener('click', function (e) {
+            if (!e.target.closest('[data-clear-user]')) return;
+            logFilter.user = null;
+            renderChips();
+            loadList();
+        });
+        P.suggest(P.$('#eq'), {
+            source: fromServer('users'),
+            emptyText: 'No matching users',
+            onPick: function (item) {
+                logFilter.user = { id: item.id, name: item.value };
+                P.$('#eq').value = '';
+                renderChips();
+                loadList();
+            }
+        });
+        renderChips();
     }
 
     // ============================================================= settings ==
