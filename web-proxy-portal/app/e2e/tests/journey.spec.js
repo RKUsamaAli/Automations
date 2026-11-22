@@ -167,7 +167,7 @@ test.describe.serial('full product journey', () => {
         await shot(phone, '10-browse-iphone');
         // address bar suggests the admin's sites while typing
         await phone.locator('#url').fill(siteName);
-        await expect(phone.getByRole('option', { name: new RegExp(siteName) })).toBeVisible();
+        await expect(phone.getByRole('group', { name: 'Your sites' }).getByRole('option', { name: new RegExp(siteName) })).toBeVisible();
         await shot(phone, '10b-browse-suggestions-iphone', { fullPage: false });
         await phone.locator('#url').press('Escape');
         await expect(phone.getByRole('listbox')).toBeHidden();
@@ -320,11 +320,16 @@ test.describe.serial('full product journey', () => {
     test('long lists load in batches while scrolling; the summary counts the whole set', async () => {
         // 130 portal API calls -> 130+ rows of type "Portal API" in the request log
         // (sent from the page, so they use the browser's host mapping and the admin's cookies)
-        await admin.evaluate(async () => {
-            for (let i = 0; i < 130; i++) await fetch('/api/admin/overview', { credentials: 'same-origin' });
-        });
+        // Each call carries this run's marker, so the list below holds exactly these
+        // 130 rows (the log on a shared test server keeps growing run after run).
+        const marker = `lazy${S.run}`;
+        await admin.evaluate(async (m) => {
+            for (let i = 0; i < 130; i++) await fetch('/api/admin/overview?e2e=' + m + '&i=' + i, { credentials: 'same-origin' });
+        }, marker);
         await admin.getByRole('button', { name: 'Requests' }).click();
         await admin.locator('#rkind').selectOption('api');
+        await admin.locator('#rq').fill(marker);
+        await admin.locator('#rq').press('Escape');
         const rows = admin.locator('#req-list tbody tr');
         const summary = admin.locator('#req-list .summary-bar');
         // rows are written in 2 s batches: reload the list until all 130 are counted
@@ -333,7 +338,7 @@ test.describe.serial('full product journey', () => {
             await admin.locator('#rhours').selectOption('24');
             await expect(summary).toBeVisible({ timeout: 1000 });
             const total = Number((await summary.locator('b').first().textContent() || '0').replace(/\D/g, ''));
-            expect(total).toBeGreaterThanOrEqual(130);
+            expect(total).toBe(130);
         }).toPass({ timeout: 15000 });
         const total = Number((await summary.locator('b').first().textContent() || '0').replace(/\D/g, ''));
         // first request: one batch of 50 rows + the summary of everything
@@ -354,12 +359,12 @@ test.describe.serial('full product journey', () => {
         }).toPass({ timeout: 20000 });
         await expect(rows).toHaveCount(total); // every row exactly once, nothing skipped
         // search suggests users and sites; picking a user filters by that user (removable chip)
-        await admin.locator('#rq').fill(user.name.slice(0, 6));
+        await admin.locator('#rq').fill(user.name.slice(0, 8));
         const opt = admin.getByRole('option', { name: new RegExp(user.name) });
         await expect(opt).toBeVisible();
         await expect(admin.getByRole('group', { name: 'Users' })).toBeVisible();
         await admin.locator('#rkind').selectOption('');
-        await admin.locator('#rq').fill(user.name.slice(0, 6));
+        await admin.locator('#rq').fill(user.name.slice(0, 8));
         await expect(opt).toBeVisible();
         await admin.evaluate(() => window.scrollTo(0, 0));
         await shot(admin, '18f-admin-requests-suggestions', { fullPage: false });
@@ -416,6 +421,54 @@ test.describe.serial('full product journey', () => {
         await shot(phone, '21-signed-out-iphone');
         await phone.goto(ownProxyUrl); // the still-active session from the previous step
         await expect(phone).toHaveURL(new RegExp('^' + S.appUrl.replace(/[.]/g, '\\.') + '/login'));
+    });
+
+    test('dark mode: System / Light / Dark switch', async () => {
+        await phone.goto(S.appUrl + '/');
+        await phone.getByRole('button', { name: 'Dark theme' }).click();
+        await expect(phone.locator('html')).toHaveAttribute('data-theme', 'dark');
+        await expect(phone.getByRole('button', { name: 'Dark theme' })).toHaveAttribute('aria-pressed', 'true');
+        await shot(phone, '23-browse-dark-iphone', { fullPage: false });
+        await phone.reload();
+        await expect(phone.locator('html')).toHaveAttribute('data-theme', 'dark'); // remembered, applied before paint
+        await admin.getByRole('button', { name: 'Dark theme' }).click();
+        await admin.getByRole('button', { name: 'Dashboard' }).click();
+        await expect(admin.getByRole('heading', { name: 'Traffic, last 24 hours' })).toBeVisible();
+        await shot(admin, '24-admin-dashboard-dark', { fullPage: false });
+        await admin.getByRole('button', { name: 'System theme' }).click();
+        await expect(admin.locator('html')).not.toHaveAttribute('data-theme', /./);
+        await phone.getByRole('button', { name: 'Light theme' }).click();
+        await expect(phone.locator('html')).toHaveAttribute('data-theme', 'light');
+        await phone.getByRole('button', { name: 'System theme' }).click();
+    });
+
+    test('expired sign-in: password prompt over the page, then it simply continues', async () => {
+        await login(phone, user.name, user.pass); // the previous step signed out
+        await expect(phone).toHaveURL(S.appUrl + '/');
+        await expect(phone.locator('#sessions')).toBeVisible();
+        // The 5-minute access token runs out: the page renews it silently.
+        await phone.context().clearCookies({ name: 'pp_at' });
+        await phone.getByRole('button', { name: 'Refresh' }).click();
+        await expect(phone.locator('.reauth')).toHaveCount(0);
+        expect((await phone.context().cookies()).some((c) => c.name === 'pp_at'), 'new access token').toBeTruthy();
+        // The 24-hour identity token runs out (simulated): the prompt appears over the page.
+        await phone.route('**/api/auth/refresh', (route) => route.fulfill({ status: 401, contentType: 'application/json', body: JSON.stringify({ error: 'Your sign-in has expired', code: 'identity_expired', username: user.name }) }), { times: 1 });
+        await phone.context().clearCookies({ name: 'pp_at' });
+        await phone.locator('#url').fill('typed before the prompt');
+        await phone.getByRole('button', { name: 'Refresh' }).click();
+        const prompt = phone.getByRole('alertdialog', { name: 'Your session has expired' });
+        await expect(prompt).toBeVisible();
+        await expect(prompt).toContainText(user.name);
+        await shot(phone, '25-session-expired-prompt-iphone', { fullPage: false });
+        await prompt.getByLabel('Password').fill('wrong-password');
+        await prompt.getByRole('button', { name: 'Continue' }).click();
+        await expect(prompt.getByRole('alert')).toHaveText('Invalid username or password');
+        await prompt.getByLabel('Password').fill(user.pass);
+        await prompt.getByRole('button', { name: 'Continue' }).click();
+        await expect(prompt).toBeHidden();
+        await expect(phone.locator('#url')).toHaveValue('typed before the prompt'); // nothing lost
+        await expect(phone.locator('#sessions li').first()).toBeVisible();
+        await phone.locator('#url').fill('');
     });
 
     test('user changes password; the old password stops working', async () => {

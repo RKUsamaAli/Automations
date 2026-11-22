@@ -28,7 +28,7 @@ const router = express.Router();
 // Brute-force protection: 10 failed attempts per 15 min per IP (nginx adds another layer).
 const failures = new RateLimiter(15 * 60000);
 const MAX_FAILURES = 10;
-// Sign-up spam protection: 5 registrations per hour per IP.
+// Sign-up spam protection: SIGNUP_LIMIT_PER_HOUR (default 5) registrations per hour per IP.
 const signups = new RateLimiter(60 * 60000);
 
 const LOGIN_ERRORS = {
@@ -60,7 +60,7 @@ function publicUser(u) {
 router.post('/register', (req, res) => {
     const mode = settings.get('registration_mode');
     if (mode === 'closed') return res.status(403).json({ error: 'Sign-up is closed. Ask an administrator for an account.' });
-    if (!signups.hit(`signup:${req.ip}`, 5)) return res.status(429).json({ error: 'Too many sign-ups from your network. Try again later.' });
+    if (!signups.hit(`signup:${req.ip}`, Number(process.env.SIGNUP_LIMIT_PER_HOUR) || 5)) return res.status(429).json({ error: 'Too many sign-ups from your network. Try again later.' });
 
     const { username, email, password, confirmPassword } = req.body || {};
     if (confirmPassword !== undefined && confirmPassword !== password) return res.status(400).json({ error: 'Passwords do not match' });
