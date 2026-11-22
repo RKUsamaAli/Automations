@@ -268,7 +268,6 @@ test.describe.serial('full product journey', () => {
         await phone.goto(S.appUrl + '/');
         // typing an address still opens the site directly
         await phone.locator('#url').fill('http://shop.localtest/login'); // typed addresses default to https; the fake shop is http only
-        await phone.locator('#url').press('Escape');
         await phone.locator('#go').click();
         await expect(phone.locator('#shop-login')).toBeVisible();
         await phone.goto(S.appUrl + '/');
@@ -295,7 +294,6 @@ test.describe.serial('full product journey', () => {
         await useProxy(phone, 'My proxies');
         await expect(phone.locator('#pool-health')).toHaveText('1 of 1 online');
         await phone.locator('#url').fill('http://shop.localtest/'); // the fake shop is plain HTTP; without a scheme the portal assumes https://
-        await phone.locator('#url').press('Escape');
         await phone.getByRole('button', { name: 'Go', exact: true }).click();
         await expect(phone.locator('#shop-title')).toBeVisible();
         await expect(phone.locator('#via-name')).toHaveText('Your own proxy');
@@ -539,7 +537,6 @@ test.describe.serial('full product journey', () => {
     test('a page that fails shows a friendly error with a reference; the admin finds it with the steps', async () => {
         await phone.goto(S.appUrl + '/');
         await phone.locator('#url').fill('http://broken.localtest/checkout');
-        await phone.locator('#url').press('Escape');
         await phone.getByRole('button', { name: 'Go', exact: true }).click();
         await expect(phone.getByRole('heading', { name: "This page couldn't load" })).toBeVisible({ timeout: 20000 });
         const ref = await phone.locator('.ref code').textContent();
