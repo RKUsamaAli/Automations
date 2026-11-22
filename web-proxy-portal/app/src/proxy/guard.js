@@ -11,7 +11,9 @@
  *  6. Address checks  - private/internal addresses blocked; allowlist for
  *                       page navigations (or all requests in strict mode)
  *  7. Rate limit      - requests/minute and daily bandwidth per user
- *  8. Usage tracking  - counts response bytes for logs
+ *  8. Usage tracking  - counts response bytes; records the step in the session's
+ *                       trail (pages + failures only) for error reports
+ *  9. Dropped pages   - upstream hang-ups on page loads get an error page + report
  *
  * Return value contract (Rammerhead pipeline): `true` = we answered, stop.
  */
@@ -29,6 +31,7 @@ const { parseProxied } = require('./proxyUrl');
 const { COOKIE_PROXY, parseCookies, readProxy } = require('../lib/authTokens');
 const { renderMessage } = require('./pages');
 const { isPrivateHost } = require('../lib/netGuard');
+const observability = require('./observability');
 
 // Paths anyone may open without the proxy cookie.
 const PUBLIC_PATHS = new Set(['/__portal/start', '/__portal/logout', '/__portal/healthz', '/', '/favicon.ico', '/robots.txt']);
@@ -94,8 +97,8 @@ function deny(req, res, isWebsocket, status, message, { navigation = false, extr
     return true;
 }
 
-/** Wraps res.write/end to count bytes sent to the browser. */
-function trackBytes(res, userId, sessionId) {
+/** Wraps res.write/end to count bytes sent to the browser, and records the step when it ends. */
+function trackBytes(res, userId, sessionId, step) {
     let bytes = 0;
     const count = (chunk, encoding) => {
         if (!chunk || typeof chunk === 'function') return;
@@ -111,7 +114,16 @@ function trackBytes(res, userId, sessionId) {
         count(chunk, encoding);
         return end.call(this, chunk, encoding, cb);
     };
-    res.once('finish', () => usage.track(userId, sessionId, bytes));
+    let done = false;
+    res.once('finish', () => {
+        done = true;
+        usage.track(userId, sessionId, bytes);
+        observability.recordRequest({ ...step, res });
+    });
+    // Connection dropped before the response finished (upstream hung up, user navigated away ...)
+    res.once('close', () => {
+        if (!done) observability.recordRequest({ ...step, res, aborted: true });
+    });
 }
 
 /**
@@ -122,8 +134,22 @@ function trackBytes(res, userId, sessionId) {
 function createGuard({ rh, sessionStore }) {
     const getSession = (id) => sessionStore.get(id, false);
 
-    return async function guard(req, res, _serverInfo, isRoute, isWebsocket) {
+    // Any exception in the checks below becomes an error report + an error page
+    // with a reference, instead of a hung or reset connection.
+    return async function guard(req, res, serverInfo, isRoute, isWebsocket) {
+        try {
+            return await checks(req, res, serverInfo, isRoute, isWebsocket);
+        } catch (err) {
+            observability.reportGuardException(req, res, err, isWebsocket);
+            return true;
+        }
+    };
+
+    async function checks(req, res, _serverInfo, isRoute, isWebsocket) {
+        const startedAt = Date.now();
         req.portalClientIp = clientIp(req); // read X-Real-IP before it is removed
+        req.portalRequestId = req.headers['x-request-id'] || null; // nginx's id, ties logs together
+        delete req.headers['x-request-id']; // never forwarded to target sites
         for (const h of STRIP_HEADERS) delete req.headers[h];
 
         const pathname = (req.url || '').split('?')[0];
@@ -221,9 +247,39 @@ function createGuard({ rh, sessionStore }) {
         }
 
         // ---- 8. usage tracking -----------------------------------------------
-        if (!isWebsocket) trackBytes(res, user.id, sid);
+        if (!isWebsocket) trackBytes(res, user.id, sid, { sid, req, parsed, navigation, startedAt, userId: user.id });
+
+        // ---- 9. dropped connections on page loads ------------------------------
+        // When the upstream proxy / site hangs up, hammerhead just closes the
+        // browser's connection (blank "connection closed" screen, nothing logged).
+        // For page navigations we answer with our error page + report instead.
+        if (navigation && parsed && typeof session.handlePageError === 'function') {
+            const socket = req.socket;
+            const originalEnd = socket.end;
+            let restored = false;
+            const restore = () => {
+                if (!restored) {
+                    restored = true;
+                    socket.end = originalEnd;
+                }
+            };
+            socket.end = function (...args) {
+                if (!restored && !res.headersSent && !res.writableEnded) {
+                    restore();
+                    session.handlePageError(
+                        { req, res, dest: { url: parsed.destUrl, hostname: parsed.host } },
+                        Object.assign(new Error('socket hang up: the upstream proxy or the website closed the connection'), { code: 'ECONNRESET' })
+                    );
+                    return socket;
+                }
+                restore();
+                return originalEnd.apply(this, args);
+            };
+            res.once('finish', restore);
+            res.once('close', restore);
+        }
         return false; // continue into Rammerhead
-    };
+    }
 }
 
 // Note: WebSockets need no separate hook - hammerhead re-enters this same

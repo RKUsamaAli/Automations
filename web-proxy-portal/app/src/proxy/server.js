@@ -35,6 +35,8 @@ const usage = require('../services/usage');
 const { createGuard } = require('./guard');
 const { setupRoutes, ensureInjector } = require('./routes');
 const socksBridge = require('./socksBridge');
+const observability = require('./observability');
+const errorReports = require('../services/errorReports');
 
 const useWorkers = config.proxy.workers > 0;
 const isPrimary = cluster.isPrimary;
@@ -93,7 +95,13 @@ const sessionStore = new rh.RammerheadSessionFileCache({
 });
 sessionStore.attachToProxy(proxyServer);
 // Every time a session is loaded from disk, make sure our script loader is attached.
-sessionStore.onSessionCreate((session) => ensureInjector(session));
+// Every time a session is loaded: attach our script loader, and replace
+// Rammerhead's no-op page-error hook (otherwise a failed page load hangs the
+// browser until the stuck-request timeout) with error page + error report.
+sessionStore.onSessionCreate((session) => {
+    ensureInjector(session);
+    session.handlePageError = observability.makePageErrorHandler(session);
+});
 
 // Our guard must run before everything else Rammerhead does with a request.
 proxyServer.addToOnRequestPipeline(createGuard({ rh, sessionStore }));
@@ -192,4 +200,7 @@ if (useWorkers && !isPrimary) {
     }
 }
 
-process.on('unhandledRejection', (e) => log.error('unhandled rejection', e));
+process.on('unhandledRejection', (e) => {
+    log.error('unhandled rejection', e);
+    errorReports.report({ source: 'proxy', kind: 'process_exception', error: e instanceof Error ? e : String(e) });
+});

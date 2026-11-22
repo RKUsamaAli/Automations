@@ -21,6 +21,7 @@ const sites = require('../../services/sites');
 const sessions = require('../../services/sessions');
 const pools = require('../../services/pools');
 const healthCheck = require('../../jobs/healthCheck');
+const { isBug } = require('../../lib/errors');
 const settings = require('../../services/settings');
 const events = require('../../services/events');
 const { hostOf } = require('../../lib/domainMatch');
@@ -152,7 +153,7 @@ router.get('/proxies', requireUserProxies, (req, res) => {
     });
 });
 
-router.post('/proxies', requireUserProxies, async (req, res) => {
+router.post('/proxies', requireUserProxies, async (req, res, next) => {
     const { text, defaultProtocol } = req.body || {};
     try {
         const result = await pools.importUserProxies(req.user, text, defaultProtocol === 'socks5' ? 'socks5' : 'http', settings.get('max_proxies_per_user'));
@@ -162,16 +163,21 @@ router.post('/proxies', requireUserProxies, async (req, res) => {
         }
         res.json(result);
     } catch (e) {
+        if (isBug(e)) return next(e);
         res.status(400).json({ error: e.message });
     }
 });
 
-router.post('/proxies/check', requireUserProxies, async (req, res) => {
-    const pool = pools.getPersonalPool(req.user.id);
-    if (!pool) return res.json({ checked: 0 });
-    const result = await healthCheck.checkAll({ poolId: pool.id });
-    if (result.skipped) return res.status(409).json({ error: 'A check is already running, try again in a moment.' });
-    res.json(result);
+router.post('/proxies/check', requireUserProxies, async (req, res, next) => {
+    try {
+        const pool = pools.getPersonalPool(req.user.id);
+        if (!pool) return res.json({ checked: 0 });
+        const result = await healthCheck.checkAll({ poolId: pool.id });
+        if (result.skipped) return res.status(409).json({ error: 'A check is already running, try again in a moment.' });
+        res.json(result);
+    } catch (e) {
+        next(e);
+    }
 });
 
 router.patch('/proxies/:id', requireUserProxies, (req, res) => {

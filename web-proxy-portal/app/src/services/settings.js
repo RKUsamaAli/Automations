@@ -42,7 +42,7 @@ const ENUMS = {
     upstream_fallback: ['deny', 'direct']
 };
 
-const cache = new TtlCache(10000);
+const cache = new TtlCache(3000); // short: several processes share the DB, admin changes must show up quickly
 
 function getAll() {
     return cache.get('all', () => {

@@ -16,6 +16,11 @@ limit_conn_zone $binary_remote_addr zone=pp_conn:10m;
 limit_req_status  429;
 limit_conn_status 429;
 
+# Access log with timing and the request id (also sent to the app as X-Request-Id,
+# so an error report's request_id can be found here:  grep rid=<id> /var/log/nginx/proxy-portal-*.log)
+log_format pp_main '$remote_addr [$time_local] "$request" $status $body_bytes_sent '
+                   'rt=$request_time host=$host rid=$request_id "$http_user_agent"';
+
 map $http_upgrade $pp_connection_upgrade {
     default upgrade;
     ''      close;
@@ -51,7 +56,7 @@ server {
 
     add_header Strict-Transport-Security "max-age=31536000" always;
     client_max_body_size 2m;
-    access_log /var/log/nginx/proxy-portal-app.access.log;
+    access_log /var/log/nginx/proxy-portal-app.access.log pp_main;
     error_log  /var/log/nginx/proxy-portal-app.error.log warn;
 
     location = /api/auth/login {
@@ -77,7 +82,7 @@ server {
     include /etc/nginx/snippets/proxy-portal-ssl.conf;
 
     client_max_body_size 100m;       # uploads on proxied sites
-    access_log /var/log/nginx/proxy-portal-proxy.access.log;
+    access_log /var/log/nginx/proxy-portal-proxy.access.log pp_main;
     error_log  /var/log/nginx/proxy-portal-proxy.error.log warn;
 
     location / {
@@ -99,7 +104,7 @@ server {
     include /etc/nginx/snippets/proxy-portal-ssl.conf;
 
     client_max_body_size 100m;
-    access_log /var/log/nginx/proxy-portal-proxy.access.log;
+    access_log /var/log/nginx/proxy-portal-proxy.access.log pp_main;
     error_log  /var/log/nginx/proxy-portal-proxy.error.log warn;
 
     location / {

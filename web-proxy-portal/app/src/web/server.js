@@ -23,6 +23,7 @@ const db = require('../db');
 const log = require('../lib/logger')('web');
 const { securityHeaders, cookies, csrf } = require('./middleware/security');
 const { loadUser, requireUser, requireAdmin } = require('./middleware/auth');
+const { requestId, recordTrail, errorHandler } = require('./middleware/observability');
 
 config.validate();
 db.open();
@@ -45,17 +46,20 @@ app.get('/healthz', (_req, res) => {
     }
 });
 
+app.use(requestId);
 app.use(securityHeaders);
 app.use(express.json({ limit: '1mb' }));
 app.use(cookies);
 app.use(csrf);
 app.use(loadUser);
+app.use(recordTrail);
 
 // Static assets (css/js). HTML pages are served by explicit routes below.
 app.use('/assets', express.static(PUBLIC, { index: false, maxAge: config.isProduction ? '1h' : 0 }));
 
 // ---- API ----
 app.use('/api/auth', require('./routes/auth'));
+app.use('/api/client-errors', require('./routes/clientErrors'));
 app.use('/api/portal', requireUser, require('./routes/portal'));
 app.use('/api/admin', requireAdmin, require('./routes/admin'));
 app.use('/api', (_req, res) => res.status(404).json({ error: 'Not found' }));
@@ -72,12 +76,8 @@ app.get('/admin', requireAdmin, page('admin.html'));
 app.get('/favicon.ico', (_req, res) => res.status(204).end());
 
 app.use((_req, res) => res.status(404).send('Not found'));
-// eslint-disable-next-line no-unused-vars
-app.use((err, req, res, _next) => {
-    log.error(`unhandled error on ${req.method} ${req.originalUrl}`, err);
-    if (err.type === 'entity.parse.failed') return res.status(400).json({ error: 'Invalid JSON body' });
-    res.status(500).json({ error: 'Internal server error' });
-});
+// Unexpected failures -> 500 + error report with the user's recent steps + reference.
+app.use(errorHandler);
 
 const server = app.listen(config.web.port, config.web.host, () => {
     log.info(`portal listening on http://${config.web.host}:${config.web.port} (public: ${config.appBaseUrl}, release: ${config.releaseName})`);

@@ -37,6 +37,11 @@
         if (!(await P.confirm(message, opts || { confirmLabel: 'Continue', danger: true }))) return;
         try { await fn(); } catch (err) { P.toast(err.message); }
     }
+    function updateErrorBadge(n) {
+        var el = P.$('#error-count');
+        el.textContent = n;
+        el.classList.toggle('hidden', !n);
+    }
     function updatePendingBadge(n) {
         var el = P.$('#pending-count');
         el.textContent = n;
@@ -46,7 +51,7 @@
     // ---------------------------------------------------------------- modal --
     var modal = P.$('#modal');
     var modalError = P.$('#modal-error');
-    function closeModal() { modal.classList.add('hidden'); P.$('#modal-body').innerHTML = ''; }
+    function closeModal() { modal.classList.add('hidden'); modal.querySelector('.modal').classList.remove('wide'); P.$('#modal-body').innerHTML = ''; }
     P.$('#modal-close').addEventListener('click', closeModal);
     modal.addEventListener('click', function (e) { if (e.target === modal) closeModal(); });
 
@@ -129,6 +134,7 @@
         var o = await P.api('GET', '/api/admin/overview');
         P.$('#release').textContent = o.release;
         updatePendingBadge(o.pendingUsers);
+        updateErrorBadge(o.openErrors);
         // Always 14 day slots (empty days = 0) so one busy day is not one giant bar.
         var byDay = {};
         o.daily.forEach(function (d) { byDay[d.day] = d; });
@@ -143,6 +149,7 @@
             stat(o.sessions.active, 'Active sessions') + stat(o.sessions.today, 'Sessions today') +
             stat(o.users, 'Users') + (o.pendingUsers ? '<div class="stat highlight"><div class="value">' + o.pendingUsers + '</div><div class="label">Awaiting approval</div></div>' : '') +
             stat(o.usableProxies + ' / ' + o.proxies, 'Usable proxies') +
+            (o.openErrors ? '<a class="stat highlight" href="#errors" id="open-errors-stat"><div class="value">' + o.openErrors + '</div><div class="label">Open errors</div></a>' : '') +
             stat(P.formatBytes(o.usageToday.bytes), 'Bandwidth today') + stat(o.usageToday.requests, 'Requests today') +
             '</div>' +
             (o.proxies === 0 ? '<div class="alert error">No upstream proxies yet. Open <strong>Proxy pools</strong> and import some, or allow direct connections in Settings.</div>' : '') +
@@ -468,7 +475,7 @@
         var res = await P.api('GET', '/api/admin/scripts');
         var list = res.scripts;
         view.innerHTML = '<section class="card"><div class="card-title"><h2>Injected scripts</h2><span class="spacer"></span><button type="button" class="primary small" id="add">Add script</button></div>' +
-            '<p class="muted small">Scripts are added to every matching proxied page, lowest load order first. Inside a script, <code>window.__portal.page.url</code> / <code>.host</code> give the real site address (<code>location</code> shows the proxy URL). Changes apply within ~10 seconds.</p>' +
+            '<p class="muted small">Scripts are added to every matching proxied page, lowest load order first. Inside a script, <code>window.__portal.page.url</code> / <code>.host</code> give the real site address (<code>location</code> shows the proxy URL). Changes apply within a few seconds.</p>' +
             (list.length ? '<div class="table-wrap"><table><thead><tr><th>Order</th><th>Script</th><th>Domains</th><th>Runs at</th><th>Enabled</th><th></th></tr></thead><tbody>' +
                 list.map(function (s) {
                     return '<tr><td>' + s.load_order + '</td><td><strong>' + esc(s.name) + '</strong><div class="muted small">' + esc(P.formatBytes(s.code.length)) + ', updated ' + esc(P.timeAgo(s.updated_at)) + '</div></td>' +
@@ -530,7 +537,8 @@
     async function logsView() {
         var usage = await P.api('GET', '/api/admin/usage?days=7');
         var events = await P.api('GET', '/api/admin/events?limit=200');
-        view.innerHTML = '<section class="card"><h2>Usage per user (7 days)</h2><div class="table-wrap"><table><thead><tr><th>User</th><th>Requests</th><th>Bandwidth</th></tr></thead><tbody>' +
+        view.innerHTML = '<div class="toolbar"><span class="spacer"></span><a class="btn small" href="/api/admin/events.csv" download>Export activity (CSV)</a></div>' +
+            '<section class="card"><h2>Usage per user (7 days)</h2><div class="table-wrap"><table><thead><tr><th>User</th><th>Requests</th><th>Bandwidth</th></tr></thead><tbody>' +
             usage.users.map(function (u) { return '<tr><td>' + esc(u.username) + '</td><td>' + u.requests + '</td><td>' + esc(P.formatBytes(u.bytes)) + '</td></tr>'; }).join('') +
             '</tbody></table></div></section><section class="card"><h2>Event log</h2>' + eventsTable(events) + '</section>';
     }
@@ -577,13 +585,119 @@
             try {
                 await P.api('PUT', '/api/admin/settings', patch);
                 P.showError(P.$('#settings-error'), '');
-                P.toast('Settings saved (active within ~10 seconds)');
+                P.toast('Settings saved (active within a few seconds)');
             } catch (err) { P.showError(P.$('#settings-error'), err.message); }
         });
     }
 
+    // --------------------------------------------------------------- errors --
+    var KIND_LABELS = {
+        page_load_failed: 'Page failed to load', site_error: 'Site returned an error', upstream_auth_failed: 'Upstream proxy login rejected',
+        server_exception: 'Server error', process_exception: 'Process error', client_js: 'Browser error', client_promise: 'Browser error',
+        api_error: 'API call failed', network_error: 'Network error'
+    };
+    var errorFilter = { status: 'open', q: '' };
+    function kindLabel(k) { return KIND_LABELS[k] || k.replace(/_/g, ' '); }
+    function sevBadge(r) { return '<span class="badge ' + (r.severity === 'warning' ? 'warn' : 'bad') + '">' + esc(kindLabel(r.kind)) + '</span>'; }
+
+    async function errorsView() {
+        var res = await P.api('GET', '/api/admin/errors?status=' + errorFilter.status + '&q=' + encodeURIComponent(errorFilter.q));
+        updateErrorBadge(res.open);
+        var list = res.reports;
+        view.innerHTML =
+            '<div class="toolbar"><div class="segmented" role="tablist">' + ['open', 'resolved', 'all'].map(function (st) {
+                return '<button type="button" data-filter="' + st + '" class="' + (errorFilter.status === st ? 'active' : '') + '">' + st.charAt(0).toUpperCase() + st.slice(1) + '</button>';
+            }).join('') + '</div>' +
+            '<input type="search" id="error-q" placeholder="Search reference, message, site, user" value="' + esc(errorFilter.q) + '" aria-label="Search errors">' +
+            '<a class="btn small" href="/api/admin/errors.jsonl?days=30" download>Export (JSON Lines)</a></div>' +
+            '<section class="card"><div class="card-title"><h2>Error reports</h2><span class="muted small">' + list.length + ' shown</span></div>' +
+            '<p class="card-sub">Only failures are recorded. Each report includes the steps the user took before it happened, so it can be reproduced. Users see the reference (e.g. E-7K2P9Q) on the error page.</p>' +
+            (list.length ? '<div class="table-wrap"><table><thead><tr><th>Reference</th><th>What</th><th>Where</th><th>User</th><th>Message</th><th>Seen</th><th></th></tr></thead><tbody>' +
+                list.map(function (r) {
+                    var where = r.dest_host || (r.url || '').split('?')[0] || '-';
+                    return '<tr><td><code>' + esc(r.ref) + '</code>' + (r.resolved ? ' <span class="badge ok plain">resolved</span>' : '') + '</td>' +
+                        '<td>' + sevBadge(r) + '<div class="muted small">' + esc(r.source) + '</div></td>' +
+                        '<td class="small">' + esc(where.slice(0, 60)) + '</td><td>' + esc(r.username || '-') + '</td>' +
+                        '<td class="small msg-cell">' + esc(r.message.slice(0, 160)) + '</td>' +
+                        '<td class="small">' + esc(P.timeAgo(r.last_seen_at)) + (r.occurrences > 1 ? '<div class="muted">×' + r.occurrences + '</div>' : '') +
+                        (r.group_count > 1 ? '<div class="muted">' + r.group_count + ' similar</div>' : '') + '</td>' +
+                        '<td class="actions"><button type="button" class="small primary" data-view="' + esc(r.ref) + '">View</button></td></tr>';
+                }).join('') + '</tbody></table></div>'
+                : '<div class="empty"><strong>' + (errorFilter.status === 'open' ? 'No open errors' : 'Nothing found') + '</strong>Errors appear here the moment a user hits one.</div>') +
+            '</section>';
+        P.$all('[data-filter]', view).forEach(function (b) { b.addEventListener('click', function () { errorFilter.status = b.getAttribute('data-filter'); errorsView(); }); });
+        var q = P.$('#error-q');
+        var timer;
+        q.addEventListener('input', function () { clearTimeout(timer); timer = setTimeout(function () { errorFilter.q = q.value.trim(); errorsView().then(function () { var n = P.$('#error-q'); n.focus(); n.setSelectionRange(n.value.length, n.value.length); }); }, 350); });
+        on('[data-view]', 'click', function (btn) { showErrorReport(btn.getAttribute('data-view')); });
+    }
+
+    function describeCrumb(c) {
+        var st = c.status != null && c.status !== '' ? ' → ' + c.status : '';
+        var ms = c.ms != null ? ' (' + c.ms + ' ms)' : '';
+        switch (c.type) {
+            case 'event': return eventLabel(c.event) + (c.detail ? ': ' + c.detail : '');
+            case 'page': return 'Opened ' + (c.url || '') + st + ms + (c.error ? ' [' + c.error + ']' : '');
+            case 'resource': return 'Loaded ' + (c.url || '') + st + ms;
+            case 'api': return 'Portal API ' + (c.method || '') + ' ' + (c.url || '') + st + ms;
+            case 'browser:click': return 'Pressed “' + (c.label || '') + '”' + (c.url ? ' on ' + c.url : '');
+            case 'browser:submit': return 'Submitted form ' + (c.label || '') + (c.url ? ' on ' + c.url : '');
+            case 'browser:page': return 'Viewed page ' + (c.url || '') + (c.label ? ' (' + c.label + ')' : '');
+            case 'browser:api': return 'Browser called ' + (c.label || '') + st + ms;
+            default: return (c.type || 'step') + ' ' + (c.label || c.url || '') + st;
+        }
+    }
+    function crumbTone(c) {
+        var s = c.status;
+        if (s === 'failed' || s === 'aborted' || s === 'network-error' || (typeof s === 'number' && s >= 400) || c.event === 'login_failed') return 'bad';
+        return '';
+    }
+
+    async function showErrorReport(ref) {
+        var r = await P.api('GET', '/api/admin/errors/' + encodeURIComponent(ref));
+        var t0 = r.created_at;
+        var rel = function (t) { var d = Math.round((t - t0) / 1000); return d === 0 ? '0s' : (d > 0 ? '+' : '−') + Math.abs(d) + 's'; };
+        var steps = (r.breadcrumbs || []).map(function (c) {
+            return '<li class="' + crumbTone(c) + '"><span class="when" title="' + esc(new Date(c.t).toISOString()) + '">' + esc(rel(c.t)) + '</span><span class="what">' + esc(describeCrumb(c)) + '</span></li>';
+        }).join('') + '<li class="bad final"><span class="when">0s</span><span class="what">' + esc(kindLabel(r.kind) + ': ' + r.message) + '</span></li>';
+        var kv = [
+            ['Reference', r.ref], ['When', P.formatDate(r.created_at) + (r.occurrences > 1 ? ' (×' + r.occurrences + ', last ' + P.timeAgo(r.last_seen_at) + ')' : '')],
+            ['User', r.username || '-'], ['Source', r.source], ['Page / URL', r.url || '-'], ['Website', r.dest_host || '-'],
+            ['Upstream', (r.context && r.context.upstream) || '-'], ['Browsing session', r.session_id ? r.session_id.slice(0, 8) + '…' : '-'],
+            ['Request id', r.request_id || '-'], ['Release', r.release || '-'], ['Client', (r.client_ip || '-') + ' · ' + (r.user_agent || '-')]
+        ];
+        P.$('#modal-title').textContent = r.ref + ' · ' + kindLabel(r.kind);
+        P.showError(P.$('#modal-error'), '');
+        P.$('#modal').querySelector('.modal').classList.add('wide');
+        P.$('#modal-body').innerHTML =
+            '<p>' + sevBadge(r) + (r.resolved ? ' <span class="badge ok">resolved ' + esc(P.timeAgo(r.resolved_at)) + '</span>' : '') + '</p>' +
+            '<p><strong>' + esc(r.message) + '</strong></p>' +
+            '<dl class="kv">' + kv.map(function (p) { return '<dt>' + esc(p[0]) + '</dt><dd>' + esc(p[1]) + '</dd>'; }).join('') + '</dl>' +
+            '<h3>Steps before the error</h3><ol class="timeline" aria-label="Steps before the error">' + steps + '</ol>' +
+            (r.stack ? '<h3>Stack trace</h3><pre class="block">' + esc(r.stack) + '</pre>' : '') +
+            '<h3>Details</h3><pre class="block">' + esc(JSON.stringify(r.context, null, 2)) + '</pre>' +
+            '<div class="row end"><button type="button" id="err-copy">Copy as JSON</button>' +
+            (r.resolved ? '<button type="button" id="err-reopen">Reopen</button>'
+                : '<button type="button" id="err-resolve-all">Resolve all like this</button><button type="button" class="primary" id="err-resolve">Mark resolved</button>') + '</div>';
+        P.$('#modal').classList.remove('hidden');
+        P.$('#err-copy').addEventListener('click', function () {
+            var text = JSON.stringify(r, null, 2);
+            (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject()).then(function () { P.toast('Copied - paste it into the bug ticket'); }, function () { P.toast('Copy not available in this browser'); });
+        });
+        var after = function (msg) { P.toast(msg); P.$('#modal').classList.add('hidden'); P.$('#modal').querySelector('.modal').classList.remove('wide'); errorsView(); };
+        if (r.resolved) {
+            P.$('#err-reopen').addEventListener('click', async function () { await P.api('POST', '/api/admin/errors/' + r.id + '/reopen'); after('Reopened'); });
+        } else {
+            P.$('#err-resolve').addEventListener('click', async function () { await P.api('POST', '/api/admin/errors/' + r.id + '/resolve'); after('Marked resolved'); });
+            P.$('#err-resolve-all').addEventListener('click', async function () {
+                var x = await P.api('POST', '/api/admin/errors/group/' + r.fingerprint + '/resolve');
+                after(x.resolved + ' report(s) resolved');
+            });
+        }
+    }
+
     // --------------------------------------------------------------- router --
-    var views = { dashboard: dashboard, users: usersView, pools: poolsView, sites: sitesView, scripts: scriptsView, sessions: sessionsView, logs: logsView, settings: settingsView };
+    var views = { dashboard: dashboard, users: usersView, pools: poolsView, sites: sitesView, scripts: scriptsView, sessions: sessionsView, errors: errorsView, logs: logsView, settings: settingsView };
 
     function show(tab) {
         if (!views[tab]) tab = 'dashboard';
@@ -594,5 +708,6 @@
     }
     P.$all('#tabs button').forEach(function (b) { b.addEventListener('click', function () { show(b.getAttribute('data-tab')); }); });
     P.$('#logout').addEventListener('click', function () { P.logout(false); });
+    window.addEventListener('hashchange', function () { show(location.hash.slice(1) || 'dashboard'); });
     show(location.hash.slice(1) || 'dashboard');
 })();

@@ -9,7 +9,9 @@ pages.
 **Features:** sign-up with admin approval, sign-in by password or access code,
 admin proxy pools shared with everyone or with chosen users, users' own proxies
 ("My proxies"), sticky upstream per session with health checks and failover,
-site tiles, injected scripts, per-user limits, usage logs, admin panel. Designed
+site tiles, injected scripts, per-user limits, usage logs, admin panel, and
+**error reports that record the steps before every failure** (with a reference the
+user can quote). Designed
 mobile-first for iPhone Safari.
 
 ![Screens](docs/screenshots/overview.png)
@@ -44,6 +46,7 @@ web-proxy-portal/
 │   ├── DEPLOYMENT.md        server setup, deploy, rollback, CI, troubleshooting
 │   ├── ADMIN-GUIDE.md       users, approvals, proxy pools, sites, scripts, settings
 │   ├── TESTING.md           unit, real-engine and Playwright browser tests
+│   ├── LOGGING.md           error reports with the user's steps, activity log, server logs
 │   └── screenshots/         every screen, captured by the browser tests
 ├── app/                     the Node.js application
 │   ├── src/

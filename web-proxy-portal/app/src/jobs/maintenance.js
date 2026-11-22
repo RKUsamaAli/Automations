@@ -6,6 +6,7 @@
 const db = require('../db');
 const events = require('../services/events');
 const sessions = require('../services/sessions');
+const errorReports = require('../services/errorReports');
 const log = require('../lib/logger')('maintenance');
 
 const RETENTION_DAYS = Number(process.env.LOG_RETENTION_DAYS) || 30;
@@ -14,12 +15,13 @@ function run() {
     const ticketRows = db.get().prepare('DELETE FROM used_tickets WHERE expires_at < ?').run(Date.now()).changes;
     const eventRows = events.prune(RETENTION_DAYS);
     const sessionRows = sessions.pruneEnded(RETENTION_DAYS);
+    const errorRows = errorReports.prune(Number(process.env.ERROR_RETENTION_DAYS) || 30);
     const usageRows = db
         .get()
         .prepare('DELETE FROM usage_daily WHERE day < ?')
         .run(new Date(Date.now() - 180 * 86400000).toISOString().slice(0, 10)).changes;
-    if (ticketRows + eventRows + sessionRows + usageRows) {
-        log.info('pruned old rows', { tickets: ticketRows, events: eventRows, sessions: sessionRows, usage: usageRows });
+    if (ticketRows + eventRows + sessionRows + usageRows + errorRows) {
+        log.info('pruned old rows', { tickets: ticketRows, events: eventRows, sessions: sessionRows, usage: usageRows, errorReports: errorRows });
     }
 }
 

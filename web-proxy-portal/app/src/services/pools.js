@@ -26,7 +26,7 @@ const { assertPublicHost } = require('../lib/netGuard');
 const { matchesAny, hostOf } = require('../lib/domainMatch');
 
 const POOL_TYPES = ['residential', 'isp', 'datacenter', 'mobile', 'other'];
-const cache = new TtlCache(10000);
+const cache = new TtlCache(3000); // short: several processes share the DB, admin changes must show up quickly
 
 // ---------------------------------------------------------------- pools ----
 const POOL_STATS = `

@@ -7,9 +7,63 @@
    Portal.confirm()    accessible confirm dialog (replaces window.confirm)
    Portal.busy()       button loading state
    Portal.icon()       inline SVG icons
+   Portal.reportError() send a browser-side error report (also automatic)
    ============================================================================= */
 (function () {
     'use strict';
+
+    // ------------------------------------------------------ error trail --
+    // The last 40 things the user did on portal pages: pages, button presses
+    // (by their label - never what was typed), API calls with status/time.
+    // Kept in memory only; sent ONLY together with an error report.
+    var crumbs = [];
+    function crumb(type, label, extra) {
+        var c = { t: Date.now(), type: type, label: String(label || '').slice(0, 120), url: location.pathname };
+        if (extra) for (var k in extra) c[k] = extra[k];
+        crumbs.push(c);
+        if (crumbs.length > 40) crumbs.shift();
+    }
+    crumb('page', document.title || location.pathname);
+    document.addEventListener('click', function (e) {
+        var el = e.target && e.target.closest ? e.target.closest('button, a, [role=tab], input[type=checkbox], select') : null;
+        if (!el) return;
+        var label = el.getAttribute('aria-label') || el.textContent || el.getAttribute('name') || el.id || el.tagName;
+        crumb('click', label.replace(/\s+/g, ' ').trim());
+    }, true);
+    document.addEventListener('submit', function (e) { crumb('submit', (e.target && (e.target.id || e.target.getAttribute('aria-label'))) || 'form'); }, true);
+
+    var lastReport = { key: '', at: 0 };
+    /**
+     * Sends an error report with the trail. Returns Promise<ref|null>.
+     * Identical errors within 10 s are sent once.
+     */
+    function reportError(kind, message, details) {
+        details = details || {};
+        var key = kind + '|' + message;
+        if (key === lastReport.key && Date.now() - lastReport.at < 10000) return Promise.resolve(lastReport.ref || null);
+        lastReport = { key: key, at: Date.now(), ref: null };
+        var body = {
+            kind: kind, message: String(message || '').slice(0, 1000), stack: details.stack, source: details.source,
+            line: details.line, column: details.column, api: details.api, requestId: details.requestId, status: details.status,
+            page: location.pathname + location.hash, viewport: window.innerWidth + 'x' + window.innerHeight,
+            online: navigator.onLine, crumbs: crumbs.slice()
+        };
+        return fetch('/api/client-errors', {
+            method: 'POST', credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': readCookie('pp_csrf') },
+            body: JSON.stringify(body)
+        }).then(function (r) { return r.json(); }).then(function (d) { lastReport.ref = d.ref; return d.ref || null; }).catch(function () { return null; });
+    }
+    window.addEventListener('error', function (e) {
+        if (!e || !e.message) return; // resource load errors carry no message
+        reportError('client_js', e.message, { stack: e.error && e.error.stack, source: e.filename, line: e.lineno, column: e.colno })
+            .then(function (ref) { if (ref) toast('Something went wrong on this page. Reference: ' + ref, 6000); });
+    });
+    window.addEventListener('unhandledrejection', function (e) {
+        var reason = e && e.reason;
+        if (reason && reason.reported) return; // API errors are reported in api()
+        reportError('client_promise', (reason && reason.message) || String(reason), { stack: reason && reason.stack });
+    });
 
     // ------------------------------------------------------------ icons --
     var ICONS = {
@@ -43,7 +97,19 @@
             opts.headers['Content-Type'] = 'application/json';
             opts.body = JSON.stringify(body);
         }
-        var res = await fetch(url, opts);
+        var started = Date.now();
+        var res;
+        try {
+            res = await fetch(url, opts);
+        } catch (netErr) {
+            // Network down / server unreachable: no server-side report possible.
+            crumb('api', method + ' ' + url, { status: 'network-error', ms: Date.now() - started });
+            reportError('network_error', 'Network request failed: ' + method + ' ' + url, { api: { method: method, url: url, status: 0 } });
+            var ne = new Error('Cannot reach the server. Check your connection and try again.');
+            ne.reported = true;
+            throw ne;
+        }
+        crumb('api', method + ' ' + url, { status: res.status, ms: Date.now() - started });
         var data = null;
         try { data = await res.json(); } catch (_) { /* empty body */ }
         if (res.status === 401 && !/\/api\/auth\//.test(url)) {
@@ -53,6 +119,16 @@
         if (!res.ok) {
             var err = new Error((data && data.error) || ('Request failed (' + res.status + ')'));
             err.reason = data && data.reason;
+            err.status = res.status;
+            err.reported = true;
+            if (data && data.ref) {
+                err.ref = data.ref; // the server already stored a report (5xx)
+            } else if (res.status >= 500) {
+                // 5xx without a report (e.g. nginx 502 while restarting): report from here.
+                reportError('api_error', 'HTTP ' + res.status + ' on ' + method + ' ' + url, {
+                    status: res.status, requestId: res.headers.get('X-Request-Id'), api: { method: method, url: url, status: res.status }
+                }).then(function (ref) { if (ref) toast('Something went wrong. Reference: ' + ref, 6000); });
+            }
             throw err;
         }
         return data;
@@ -207,6 +283,7 @@
     window.Portal = {
         api: api, esc: esc, $: $, $all: $all, toast: toast, showError: showError, busy: busy,
         formatBytes: formatBytes, timeAgo: timeAgo, formatDate: formatDate, colorFor: colorFor,
-        confirm: confirmDialog, setupReveal: setupReveal, icon: icon, shell: shell, loadMe: loadMe, logout: logout
+        confirm: confirmDialog, setupReveal: setupReveal, icon: icon, shell: shell, loadMe: loadMe, logout: logout,
+        reportError: reportError, crumb: crumb
     };
 })();

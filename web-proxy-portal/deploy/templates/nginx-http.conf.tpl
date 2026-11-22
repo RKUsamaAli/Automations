@@ -16,6 +16,11 @@ limit_conn_zone $binary_remote_addr zone=pp_conn:10m;
 limit_req_status  429;
 limit_conn_status 429;
 
+# Access log with timing and the request id (also sent to the app as X-Request-Id,
+# so an error report's request_id can be found here:  grep rid=<id> /var/log/nginx/proxy-portal-*.log)
+log_format pp_main '$remote_addr [$time_local] "$request" $status $body_bytes_sent '
+                   'rt=$request_time host=$host rid=$request_id "$http_user_agent"';
+
 map $http_upgrade $pp_connection_upgrade {
     default upgrade;
     ''      close;
@@ -26,6 +31,8 @@ server {
     listen [::]:80;
     server_name {{APP_DOMAIN}};
     client_max_body_size 2m;
+    access_log /var/log/nginx/proxy-portal-app.access.log pp_main;
+    error_log  /var/log/nginx/proxy-portal-app.error.log warn;
 
     location ^~ /.well-known/acme-challenge/ {
         root /var/www/letsencrypt;
@@ -47,6 +54,8 @@ server {
     listen [::]:80;
     server_name {{PROXY_DOMAIN}};
     client_max_body_size 100m;
+    access_log /var/log/nginx/proxy-portal-proxy.access.log pp_main;
+    error_log  /var/log/nginx/proxy-portal-proxy.error.log warn;
 
     location ^~ /.well-known/acme-challenge/ {
         root /var/www/letsencrypt;
@@ -64,6 +73,8 @@ server {
     listen [::]:8443;
     server_name {{PROXY_DOMAIN}};
     client_max_body_size 100m;
+    access_log /var/log/nginx/proxy-portal-proxy.access.log pp_main;
+    error_log  /var/log/nginx/proxy-portal-proxy.error.log warn;
 
     location / {
         limit_req  zone=pp_proxy burst=400 nodelay;

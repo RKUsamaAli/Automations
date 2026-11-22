@@ -217,3 +217,69 @@ test('users manage their own proxies; admins share pools with chosen users', asy
 
     assert.equal((await u.req('DELETE', `/api/portal/proxies/${mine.proxies[0].id}`)).status, 200);
 });
+
+test('unexpected server error -> 500 with reference; admin sees it with the steps before it', async () => {
+    const u = client();
+    await u.req('GET', '/login');
+    await u.req('POST', '/api/auth/login', { username: 'user1', password: 'userpass123' });
+    await u.req('GET', '/api/portal/sessions'); // a step before the failure
+
+    const sitesService = require('../src/services/sites');
+    const original = sitesService.listEnabled;
+    sitesService.listEnabled = () => {
+        throw new TypeError("Cannot read properties of undefined (reading 'start_url')");
+    };
+    let res;
+    try {
+        res = await u.req('GET', '/api/portal/sites');
+    } finally {
+        sitesService.listEnabled = original;
+    }
+    assert.equal(res.status, 500);
+    assert.match(res.json.ref, /^E-/);
+    assert.match(res.json.error, new RegExp(res.json.ref));
+    assert.ok(res.headers.get('x-request-id'));
+
+    const admin = client();
+    await admin.req('GET', '/login');
+    await admin.req('POST', '/api/auth/login', { username: 'admin1', password: 'adminpass123' });
+    const report = (await admin.req('GET', `/api/admin/errors/${res.json.ref}`)).json;
+    assert.equal(report.kind, 'server_exception');
+    assert.equal(report.request_id, res.headers.get('x-request-id'));
+    const steps = report.breadcrumbs.map((c) => `${c.type} ${c.url || c.event}`);
+    assert.ok(steps.some((s) => s.includes('/api/portal/sessions')), 'earlier API call is in the trail: ' + steps.join(' | '));
+    assert.ok(steps.some((s) => s === 'event login'), 'sign-in event is in the trail');
+    assert.ok(report.stack.includes('TypeError'));
+    assert.equal(JSON.stringify(report).includes('userpass123'), false, 'no password anywhere');
+
+    // validation problems are NOT error reports
+    const before = (await admin.req('GET', '/api/admin/errors?status=all')).json.reports.length;
+    await admin.req('POST', '/api/admin/sites', { name: 'x', startUrl: 'nope', domains: 'a.com' });
+    assert.equal((await admin.req('GET', '/api/admin/errors?status=all')).json.reports.length, before);
+});
+
+test('browser errors are reported with the browser trail; exports work', async () => {
+    const u = client();
+    await u.req('GET', '/login');
+    const r = await u.req('POST', '/api/client-errors', {
+        kind: 'client_js',
+        message: 'undefined is not a function',
+        stack: 'at portal.js:10',
+        page: '/',
+        crumbs: [{ t: Date.now() - 1000, type: 'click', label: 'Go' }]
+    });
+    assert.equal(r.status, 200);
+    const admin = client();
+    await admin.req('GET', '/login');
+    await admin.req('POST', '/api/auth/login', { username: 'admin1', password: 'adminpass123' });
+    const report = (await admin.req('GET', `/api/admin/errors/${r.json.ref}`)).json;
+    assert.equal(report.source, 'client');
+    assert.ok(report.breadcrumbs.some((c) => c.type === 'browser:click' && c.label === 'Go'));
+
+    const csv = await admin.req('GET', '/api/admin/events.csv');
+    assert.equal(csv.status, 200);
+    assert.match(csv.text, /^time_utc,event,user_id,username,detail,ip\n/);
+    const jsonl = await admin.req('GET', '/api/admin/errors.jsonl?days=1');
+    const lines = jsonl.text.trim().split('\n').map((l) => JSON.parse(l));
+    assert.ok(lines.some((l) => l.ref === r.json.ref));
+});

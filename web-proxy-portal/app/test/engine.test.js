@@ -59,11 +59,21 @@ test('real engine: hand-off, sticky upstream proxy, script injection, access con
     const upstream = http.createServer((req, res) => {
         seen.push({ url: req.url, auth: req.headers['proxy-authorization'] || null, xff: req.headers['x-forwarded-for'] || null });
         const target = new URL(req.url);
+        // failure scenarios for the error-reporting checks
+        if (target.hostname === 'reset.localtest') return req.socket.destroy(); // upstream drops the connection
+        if (target.hostname === 'error.localtest') {
+            res.writeHead(503, { 'content-type': 'text/html' });
+            return res.end('<h1>Service unavailable</h1>');
+        }
         // Like a real provider resolving DNS: *.localtest -> the fake site on 127.0.0.1.
         const host = target.hostname.endsWith('.localtest') ? '127.0.0.1' : target.hostname;
         const out = http.request({ host, port: target.port, path: target.pathname + target.search, method: req.method, headers: { ...req.headers, host: target.host } }, (r) => {
             res.writeHead(r.statusCode, r.headers);
             r.pipe(res);
+        });
+        out.on('error', () => {
+            if (!res.headersSent) res.writeHead(502);
+            res.end();
         });
         req.pipe(out);
     });
@@ -157,7 +167,35 @@ test('real engine: hand-off, sticky upstream proxy, script injection, access con
     const bobCookie = `${COOKIE_PROXY}=${mintProxy(bob).token}`;
     assert.equal((await get(base + location, { cookie: bobCookie, accept: 'text/html' })).status, 403);
 
-    // ---- 5. DB bookkeeping ----
+    // ---- 5. failures produce an error page with a reference + a report with the trail ----
+    const errorReports = require('../src/services/errorReports');
+    const t0 = Date.now();
+    const broken = await get(`${base}/${sid}/http://reset.localtest:${sitePort}/checkout`, { cookie, accept: 'text/html', 'sec-fetch-dest': 'document' });
+    assert.ok(Date.now() - t0 < 20000, 'answered quickly instead of hanging');
+    assert.equal(broken.status, 502, broken.text.slice(0, 300));
+    assert.match(broken.text, /couldn&#39;t load|couldn't load/);
+    const ref = (broken.text.match(/E-[2-9A-HJ-NP-Z]{6}/) || [])[0];
+    assert.ok(ref, 'reference shown to the user');
+    const report = errorReports.get(ref);
+    assert.equal(report.kind, 'page_load_failed');
+    assert.equal(report.session_id, sid);
+    assert.equal(report.dest_host, 'reset.localtest');
+    assert.match(report.context.upstream, /127\.0\.0\.1/);
+    const trailText = report.breadcrumbs.map((c) => `${c.type}:${c.url || c.event}`).join(' | ');
+    assert.ok(trailText.includes('page:http://shop.localtest'), 'earlier page in the trail: ' + trailText);
+    assert.ok(trailText.includes('event:session_start'), 'session start in the trail: ' + trailText);
+
+    await get(`${base}/${sid}/http://error.localtest:${sitePort}/`, { cookie, accept: 'text/html', 'sec-fetch-dest': 'document' });
+    let siteErr;
+    for (let i = 0; i < 20 && !siteErr; i++) {
+        siteErr = errorReports.list({ status: 'all', q: 'error.localtest' })[0];
+        if (!siteErr) await new Promise((r) => setTimeout(r, 100));
+    }
+    assert.ok(siteErr, 'site 5xx recorded');
+    assert.equal(siteErr.kind, 'site_error');
+    assert.equal(siteErr.severity, 'warning');
+
+    // ---- 6. DB bookkeeping ----
     const row = require('../src/services/sessions').get(sid);
     assert.equal(row.user_id, alice.id);
     assert.equal(row.proxy_id, proxyRow.id, 'session is stuck to the chosen proxy');

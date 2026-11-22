@@ -9,7 +9,7 @@ const TtlCache = require('../lib/ttlCache');
 const settings = require('./settings');
 const { parsePatterns, isValidPattern, matchesAny, hostOf } = require('../lib/domainMatch');
 
-const cache = new TtlCache(10000);
+const cache = new TtlCache(3000); // short: several processes share the DB, admin changes must show up quickly
 
 function list() {
     return db.get().prepare('SELECT * FROM sites ORDER BY sort_order, name').all();

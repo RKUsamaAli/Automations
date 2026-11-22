@@ -159,7 +159,11 @@ test.describe.serial('full product journey', () => {
         const options = await phone.locator('#pool option').allTextContents();
         expect(options.join('|')).toContain(pools.shared);
         expect(options.join('|')).toContain(pools.assigned);
-        await expect(phone.getByRole('button', { name: new RegExp(siteName) })).toBeVisible();
+        // Admin changes reach every portal process within a few seconds (short config cache).
+        await expect(async () => {
+            await phone.reload();
+            await expect(phone.getByRole('button', { name: new RegExp(siteName) })).toBeVisible({ timeout: 1000 });
+        }).toPass({ timeout: 10000 });
         await shot(phone, '10-browse-iphone');
     });
 
@@ -253,6 +257,37 @@ test.describe.serial('full product journey', () => {
         await admin.getByRole('button', { name: 'Settings' }).click();
         await expect(admin.locator('#set-registration_mode')).toBeVisible();
         await shot(admin, '20-admin-settings');
+    });
+
+    test('a page that fails shows a friendly error with a reference; the admin finds it with the steps', async () => {
+        await phone.goto(S.appUrl + '/');
+        await phone.locator('#url').fill('http://broken.localtest/checkout');
+        await phone.getByRole('button', { name: 'Go' }).click();
+        await expect(phone.getByRole('heading', { name: "This page couldn't load" })).toBeVisible({ timeout: 20000 });
+        const ref = await phone.locator('.ref code').textContent();
+        expect(ref).toMatch(/^E-[2-9A-HJ-NP-Z]{6}$/);
+        await shot(phone, '19a-page-error-iphone');
+
+        await admin.getByRole('button', { name: /Errors/ }).click();
+        await admin.locator('#error-q').fill(ref);
+        await expect(admin.getByText('1 shown')).toBeVisible(); // search applied (debounced)
+        await admin.waitForTimeout(400);
+        const row = admin.locator('tr', { hasText: ref });
+        await expect(row).toBeVisible();
+        await expect(row.getByText('Page failed to load')).toBeVisible();
+        await shot(admin, '19b-admin-errors');
+        await row.getByRole('button', { name: 'View' }).click();
+        const steps = admin.getByRole('list', { name: 'Steps before the error' });
+        await expect(steps).toContainText('Session started');
+        await expect(steps).toContainText('http://broken.localtest/checkout');
+        await expect(steps).toContainText('Signed in');
+        await expect(admin.locator('#modal')).toContainText(user.name);
+        await shot(admin, '19c-admin-error-detail', { fullPage: false });
+        await admin.getByRole('button', { name: 'Mark resolved' }).click();
+        await expect(admin.getByText('Marked resolved')).toBeVisible();
+
+        await phone.getByRole('link', { name: 'Back to portal' }).click();
+        await expect(phone).toHaveURL(S.appUrl + '/');
     });
 
     test('signing out also locks the proxy: an open proxied link goes to sign-in', async () => {

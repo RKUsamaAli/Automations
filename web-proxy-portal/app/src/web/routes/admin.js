@@ -13,7 +13,9 @@
  *   Scripts   : GET/POST /scripts, PUT/DELETE /scripts/:id
  *   Settings  : GET/PUT /settings
  *   Sessions  : GET /sessions, POST /sessions/:id/end
- *   Logs      : GET /usage, GET /events
+ *   Logs      : GET /usage, GET /events, GET /events.csv (export)
+ *   Errors    : GET /errors, GET /errors/:ref, POST /errors/:id/resolve, POST /errors/:id/reopen,
+ *               POST /errors/group/:fingerprint/resolve, GET /errors.jsonl (export)
  */
 const express = require('express');
 const users = require('../../services/users');
@@ -26,19 +28,25 @@ const usage = require('../../services/usage');
 const events = require('../../services/events');
 const healthCheck = require('../../jobs/healthCheck');
 const config = require('../../config');
+const errorReports = require('../../services/errorReports');
+const { isBug } = require('../../lib/errors');
 
 const router = express.Router();
 const id = (req) => Number(req.params.id);
 
-/** Wraps handlers so thrown validation errors become 400 JSON responses. */
-const h = (fn) => (req, res) => {
+/**
+ * Wraps handlers: validation errors -> 400 with the message; real bugs
+ * (see lib/errors.js) -> the error handler (500 + error report + reference).
+ */
+const h = (fn) => (req, res, next) => {
+    const fail = (e) => (isBug(e) ? next(e) : res.status(400).json({ error: e.message }));
     try {
         const out = fn(req, res);
         if (out && typeof out.then === 'function') {
-            out.then((v) => !res.headersSent && res.json(v ?? { ok: true })).catch((e) => res.status(400).json({ error: e.message }));
+            out.then((v) => !res.headersSent && res.json(v ?? { ok: true })).catch(fail);
         } else if (!res.headersSent) res.json(out ?? { ok: true });
     } catch (e) {
-        res.status(400).json({ error: e.message });
+        fail(e);
     }
 };
 
@@ -54,6 +62,7 @@ router.get(
             sessions: sessions.stats(),
             users: users.count(),
             pendingUsers: users.countPending(),
+            openErrors: errorReports.countOpen(),
             pools: poolList.length,
             proxies: poolList.reduce((a, p) => a + p.proxy_count, 0),
             usableProxies: poolList.reduce((a, p) => a + p.usable_count, 0),
@@ -249,5 +258,41 @@ router.post(
 );
 router.get('/usage', h((req) => ({ users: usage.summary(Number(req.query.days) || 7), daily: usage.daily(Number(req.query.days) || 14) })));
 router.get('/events', h((req) => events.list({ limit: req.query.limit, type: req.query.type || null, userId: Number(req.query.userId) || null })));
+
+// ---- exports for data analysis (Excel / pandas / jq) ----
+const csvCell = (v) => {
+    const s = v == null ? '' : String(v);
+    // quote, and neutralise spreadsheet formulas
+    return '"' + (/^[=+\-@]/.test(s) ? "'" + s : s).replace(/"/g, '""') + '"';
+};
+router.get('/events.csv', (req, res) => {
+    const rows = events.list({ limit: 1000000 }).reverse();
+    res.set('Content-Type', 'text/csv; charset=utf-8');
+    res.set('Content-Disposition', `attachment; filename="portal-events-${new Date().toISOString().slice(0, 10)}.csv"`);
+    res.write('time_utc,event,user_id,username,detail,ip\n');
+    for (const e of rows) res.write([new Date(e.created_at).toISOString(), e.type, e.user_id, e.username, e.detail, e.ip].map(csvCell).join(',') + '\n');
+    res.end();
+});
+
+// --------------------------------------------------------------- errors ----
+router.get('/errors', h((req) => ({ reports: errorReports.list({ status: req.query.status || 'open', q: req.query.q || '' }), open: errorReports.countOpen() })));
+router.get('/errors.jsonl', (req, res) => {
+    const days = Math.min(Number(req.query.days) || 7, 90);
+    res.set('Content-Type', 'application/x-ndjson; charset=utf-8');
+    res.set('Content-Disposition', `attachment; filename="portal-errors-${new Date().toISOString().slice(0, 10)}.jsonl"`);
+    for (const r of errorReports.exportRange(Date.now() - days * 86400000)) res.write(JSON.stringify(r) + '\n');
+    res.end();
+});
+router.get(
+    '/errors/:ref',
+    h((req) => {
+        const r = errorReports.get(req.params.ref);
+        if (!r) throw new Error('Error report not found');
+        return r;
+    })
+);
+router.post('/errors/:id/resolve', h((req) => errorReports.setResolved(id(req), true, req.user.id, (req.body || {}).note || null)));
+router.post('/errors/:id/reopen', h((req) => errorReports.setResolved(id(req), false, req.user.id, null)));
+router.post('/errors/group/:fingerprint/resolve', h((req) => ({ resolved: errorReports.resolveGroup(req.params.fingerprint, req.user.id) })));
 
 module.exports = router;

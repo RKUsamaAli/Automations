@@ -19,7 +19,7 @@ const { parsePatterns, isValidPattern, matchesAny } = require('../lib/domainMatc
 
 const RUN_AT = ['document-start', 'document-end', 'document-idle'];
 const MAX_CODE_BYTES = 200 * 1024; // keep injected code small for mobile
-const cache = new TtlCache(10000);
+const cache = new TtlCache(3000); // short: several processes share the DB, admin changes must show up quickly
 
 function list() {
     return db.get().prepare('SELECT * FROM scripts ORDER BY load_order, id').all();

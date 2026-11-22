@@ -100,6 +100,8 @@ function startUpstreamProxy({ port, name, user, pass, sitePort }) {
             res.writeHead(400);
             return res.end();
         }
+        // A site behind this proxy that always drops the connection (error-reporting scenario)
+        if (target.hostname === 'broken.localtest') return req.socket.destroy();
         const dest = route(target.hostname, Number(target.port) || 80);
         const headers = { ...req.headers, host: target.host, 'x-via-upstream': name };
         delete headers['proxy-authorization'];

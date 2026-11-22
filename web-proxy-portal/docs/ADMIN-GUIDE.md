@@ -60,7 +60,7 @@ The session then stays on one proxy (sticky) until it ends. If that proxy dies a
 | Failover | on | Move a session to another proxy of its pool if its proxy dies |
 | Lock session to IP | off | Breaks phones switching Wi-Fi ↔ 4G/5G |
 
-Changes apply within ~10–15 seconds without restarting anything.
+Changes apply within a few seconds without restarting anything.
 
 ## Scripts
 
