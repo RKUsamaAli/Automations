@@ -67,3 +67,14 @@ test('cookies and tickets', () => {
     assert.equal(p.url, 'https://example.com/');
     assert.ok(p.n && p.n.length >= 12, 'ticket carries a nonce');
 });
+
+test('proxy lines: default ports (http :80, https :443) are kept; passwords never shown in errors', () => {
+    const { parseProxyLine, parseProxyList } = require('../src/lib/proxyString');
+    assert.equal(parseProxyLine('p.webshare.io:80:yneehewk-ES-20:secret').port, 80);
+    assert.equal(parseProxyLine('http://u-ES-20:pw@p.webshare.io:80').port, 80);
+    assert.equal(parseProxyLine('https://u:pw@h.example:443').port, 443);
+    const { errors } = parseProxyList('http://user:topsecret@h.example\nh.example:99999:user:topsecret2');
+    assert.equal(errors.length, 2);
+    assert.ok(errors.every((e) => !e.includes('topsecret')), errors.join(' | '));
+    assert.match(errors[0], /user:\*\*\*@/);
+});
