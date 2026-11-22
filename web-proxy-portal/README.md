@@ -14,8 +14,6 @@ site tiles, injected scripts, per-user limits, usage logs, admin panel, and
 user can quote). Designed
 mobile-first for iPhone Safari.
 
-![Screens](docs/screenshots/overview.png)
-
 Built on **[Rammerhead](https://github.com/binary-person/rammerhead)**, a server-side
 proxy that keeps cookies and sessions on the server. Ships with production
 **server setup**, **deploy** (with automatic rollback) and **rollback** scripts for
@@ -47,7 +45,6 @@ web-proxy-portal/
 │   ├── ADMIN-GUIDE.md       users, approvals, proxy pools, sites, scripts, settings
 │   ├── TESTING.md           unit, real-engine and Playwright browser tests
 │   ├── LOGGING.md           error reports with the user's steps, activity log, server logs
-│   └── screenshots/         every screen, captured by the browser tests
 ├── app/                     the Node.js application
 │   ├── src/
 │   │   ├── config/          env loading (.env) + validation

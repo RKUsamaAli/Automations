@@ -34,7 +34,7 @@ Three layers, all runnable on a laptop or the server.
 
 The outside world is simulated in `e2e/support/fakes.js`: a demo shop
 (`shop.localtest`) and two authenticated upstream proxies. Nothing touches the internet.
-Screenshots of every screen: `e2e/screenshots/` (copies in `docs/screenshots/`).
+Screenshots of every screen are written to `e2e/screenshots/` (not committed; in CI they are attached to the run as the `e2e-screenshots` artifact).
 
 ### Local run (starts its own stack)
 
