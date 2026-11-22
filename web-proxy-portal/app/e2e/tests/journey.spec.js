@@ -324,12 +324,18 @@ test.describe.serial('full product journey', () => {
         // 130 rows (the log on a shared test server keeps growing run after run).
         const marker = `lazy${S.run}`;
         await admin.evaluate(async (m) => {
-            for (let i = 0; i < 130; i++) await fetch('/api/admin/overview?e2e=' + m + '&i=' + i, { credentials: 'same-origin' });
+            // paced at ~15/s: nginx allows 20 requests/s per IP (more would get 429 there)
+            for (let i = 0; i < 130; i++) {
+                await fetch('/api/admin/overview?e2e=' + m + '&i=' + i, { credentials: 'same-origin' });
+                await new Promise((r) => setTimeout(r, 65));
+            }
         }, marker);
         await admin.getByRole('button', { name: 'Requests' }).click();
         await admin.locator('#rkind').selectOption('api');
+        const filtered = admin.waitForResponse((r) => r.url().includes('/api/admin/requests?') && r.url().includes('q=' + marker));
         await admin.locator('#rq').fill(marker);
-        await admin.locator('#rq').press('Escape');
+        await admin.locator('#rq').blur(); // (Escape would clear a search box)
+        await filtered; // the search box applies after a short pause
         const rows = admin.locator('#req-list tbody tr');
         const summary = admin.locator('#req-list .summary-bar');
         // rows are written in 2 s batches: reload the list until all 130 are counted
@@ -338,7 +344,7 @@ test.describe.serial('full product journey', () => {
             await admin.locator('#rhours').selectOption('24');
             await expect(summary).toBeVisible({ timeout: 1000 });
             const total = Number((await summary.locator('b').first().textContent() || '0').replace(/\D/g, ''));
-            expect(total).toBe(130);
+            expect(total).toBeGreaterThanOrEqual(130); // + the list's own calls (their URL has the marker too)
         }).toPass({ timeout: 15000 });
         const total = Number((await summary.locator('b').first().textContent() || '0').replace(/\D/g, ''));
         // first request: one batch of 50 rows + the summary of everything
@@ -425,7 +431,11 @@ test.describe.serial('full product journey', () => {
 
     test('dark mode: System / Light / Dark switch', async () => {
         await phone.goto(S.appUrl + '/');
-        await phone.getByRole('button', { name: 'Dark theme' }).click();
+        // phone: one button showing the current mode; each tap cycles System -> Light -> Dark
+        await expect(phone.getByRole('button', { name: 'Light theme' })).toBeHidden();
+        await phone.getByRole('button', { name: 'System theme' }).click();
+        await expect(phone.locator('html')).toHaveAttribute('data-theme', 'light');
+        await phone.getByRole('button', { name: 'Light theme' }).click();
         await expect(phone.locator('html')).toHaveAttribute('data-theme', 'dark');
         await expect(phone.getByRole('button', { name: 'Dark theme' })).toHaveAttribute('aria-pressed', 'true');
         await shot(phone, '23-browse-dark-iphone', { fullPage: false });
@@ -437,9 +447,8 @@ test.describe.serial('full product journey', () => {
         await shot(admin, '24-admin-dashboard-dark', { fullPage: false });
         await admin.getByRole('button', { name: 'System theme' }).click();
         await expect(admin.locator('html')).not.toHaveAttribute('data-theme', /./);
-        await phone.getByRole('button', { name: 'Light theme' }).click();
-        await expect(phone.locator('html')).toHaveAttribute('data-theme', 'light');
-        await phone.getByRole('button', { name: 'System theme' }).click();
+        await phone.getByRole('button', { name: 'Dark theme' }).click(); // dark -> system
+        await expect(phone.locator('html')).not.toHaveAttribute('data-theme', /./);
     });
 
     test('expired sign-in: password prompt over the page, then it simply continues', async () => {
@@ -448,14 +457,16 @@ test.describe.serial('full product journey', () => {
         await expect(phone.locator('#sessions')).toBeVisible();
         // The 5-minute access token runs out: the page renews it silently.
         await phone.context().clearCookies({ name: 'pp_at' });
+        const renewed = phone.waitForResponse((r) => r.url().endsWith('/api/auth/refresh') && r.status() === 200);
         await phone.getByRole('button', { name: 'Refresh' }).click();
+        await renewed; // the sessions call got 401 access_token_expired -> renewed -> retried
         await expect(phone.locator('.reauth')).toHaveCount(0);
-        expect((await phone.context().cookies()).some((c) => c.name === 'pp_at'), 'new access token').toBeTruthy();
+        await expect.poll(async () => (await phone.context().cookies()).some((c) => c.name === 'pp_at'), { message: 'new access token' }).toBe(true);
         // The 24-hour identity token runs out (simulated): the prompt appears over the page.
         await phone.route('**/api/auth/refresh', (route) => route.fulfill({ status: 401, contentType: 'application/json', body: JSON.stringify({ error: 'Your sign-in has expired', code: 'identity_expired', username: user.name }) }), { times: 1 });
         await phone.context().clearCookies({ name: 'pp_at' });
+        // typing asks for suggestions -> the API call finds the sign-in expired -> prompt
         await phone.locator('#url').fill('typed before the prompt');
-        await phone.getByRole('button', { name: 'Refresh' }).click();
         const prompt = phone.getByRole('alertdialog', { name: 'Your session has expired' });
         await expect(prompt).toBeVisible();
         await expect(prompt).toContainText(user.name);
@@ -469,6 +480,8 @@ test.describe.serial('full product journey', () => {
         await expect(phone.locator('#url')).toHaveValue('typed before the prompt'); // nothing lost
         await expect(phone.locator('#sessions li').first()).toBeVisible();
         await phone.locator('#url').fill('');
+        await phone.locator('#shell-logout').click(); // the next step starts signed out
+        await expect(phone).toHaveURL(/signedout/);
     });
 
     test('user changes password; the old password stops working', async () => {

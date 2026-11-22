@@ -462,3 +462,11 @@ td.bad { color: var(--danger); font-weight: 600; }
 @media (pointer: coarse) { .theme-switch button { width: 2.25rem; height: 2.25rem; } }
 .auth-theme { position: fixed; top: 0.75rem; right: 0.75rem; z-index: 5; }
 .sidebar-foot .theme-switch { margin: 0.25rem 0.5rem 0.5rem; }
+
+/* Phones: the theme switch shrinks to one button (the current mode) that
+   cycles on tap, so the top bar keeps the brand on one line. */
+.topbar .brand span:last-child { white-space: nowrap; }
+@media (max-width: 520px) {
+    .topbar .theme-switch { border: 0; padding: 0; background: transparent; }
+    .topbar .theme-switch button:not([aria-pressed="true"]) { display: none; }
+}

@@ -49,7 +49,21 @@
         }).join('');
         box.addEventListener('click', function (e) {
             var b = e.target.closest('button[data-mode]');
-            if (b) set(b.getAttribute('data-mode'));
+            if (!b) return;
+            var mode = b.getAttribute('data-mode');
+            // On phones only the current mode's button is shown: tapping it
+            // cycles System -> Light -> Dark.
+            var other = box.querySelector('button:not([aria-pressed="true"])');
+            var compact = other && getComputedStyle(other).display === 'none';
+            if (compact && b.getAttribute('aria-pressed') === 'true') {
+                var order = ['system', 'light', 'dark'];
+                mode = order[(order.indexOf(mode) + 1) % order.length];
+                set(mode);
+                var next = box.querySelector('[data-mode="' + mode + '"]');
+                if (next) next.focus(); // keep keyboard focus on the visible button
+                return;
+            }
+            set(mode);
         });
         container.appendChild(box);
     }
