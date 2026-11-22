@@ -33,6 +33,7 @@ const config = require('../../config');
 const errorReports = require('../../services/errorReports');
 const suggest = require('../../services/suggest');
 const clientDevices = require('../../services/clientDevices');
+const sessionProxy = require('../../services/sessionProxy');
 const tzlib = require('../../lib/timezone');
 const { isId, idOrNull } = require('../../lib/ids');
 const { diff, describe } = require('../../lib/audit');
@@ -458,6 +459,22 @@ router.post(
         sessions.requestEnd(s.id);
         const owner = users.getById(s.user_id);
         audit(req, 'admin_session_ended', `${owner ? owner.username : 'user'}: session ${s.id.slice(0, 8)} (${s.start_url || ''})`, { target: `session:${s.id}` });
+    })
+);
+router.get(
+    '/sessions/:id/proxies',
+    h((req) => {
+        const s = sessions.get(req.params.id);
+        if (!s) throw Object.assign(new Error('Session not found'), { status: 404 });
+        return { current: s.proxy_id, pools: sessionProxy.choices(req.user, s, { admin: true }) };
+    })
+);
+router.post(
+    '/sessions/:id/proxy',
+    h((req) => {
+        const s = sessions.get(req.params.id);
+        if (!s) throw Object.assign(new Error('Session not found'), { status: 404 });
+        return sessionProxy.change(s, String((req.body || {}).proxyId || ''), { user: req.user, admin: true });
     })
 );
 router.get('/usage', h((req) => ({ timezone: req.tz, users: usage.summary(Number(req.query.days) || 7, req.tz), daily: usage.daily(Number(req.query.days) || 14, req.tz) })));

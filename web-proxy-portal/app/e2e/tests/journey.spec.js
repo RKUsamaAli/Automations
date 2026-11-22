@@ -265,6 +265,33 @@ test.describe.serial('full product journey', () => {
         await phone.locator('#__portal_home').click();
     });
 
+    test('a session shows its proxy and can be switched to another one', async () => {
+        await expect(phone).toHaveURL(S.appUrl + '/');
+        // the session opened through "My proxies" shows that proxy (127.0.0.1:<port> in the test setup)
+        const ownFirst = phone.locator('#sessions li').filter({ has: phone.locator('.via-line', { hasText: 'My proxies' }) }).first();
+        await expect(ownFirst).toBeVisible();
+        // pin the row by its session id (its text changes after the switch)
+        const sid = await ownFirst.locator('[data-proxy]').getAttribute('data-proxy');
+        const own = phone.locator('#sessions li').filter({ has: phone.locator(`[data-proxy="${sid}"]`) });
+        await shot(phone, '15b-session-shows-proxy-iphone', { fullPage: false });
+        await own.getByRole('button', { name: /Change the proxy/ }).click();
+        const dialog = phone.getByRole('dialog', { name: 'Change proxy' });
+        await expect(dialog).toBeVisible();
+        await expect(dialog.locator('.proxy-option').filter({ hasText: 'Current' })).toHaveCount(1);
+        await shot(phone, '15c-change-proxy-iphone', { fullPage: false });
+        // pick a proxy from the shared admin pool (not the current one)
+        await dialog.locator('fieldset', { hasText: pools.shared }).locator('.proxy-option:not(.disabled)').first().click();
+        await dialog.getByRole('button', { name: 'Use this proxy' }).click();
+        await expect(phone.getByText(/Now using/)).toBeVisible();
+        await expect(own.locator('.via-line')).toContainText(pools.shared);
+        // the next page of that session really goes out through the new upstream
+        await expect(async () => {
+            await phone.goto(ownProxyUrl);
+            await expect(phone.locator('#via-name')).toHaveText('Admin provider (US)', { timeout: 1000 });
+        }).toPass({ timeout: 10000 });
+        await phone.locator('#__portal_home').click();
+    });
+
     // ------------------------------------------------------------ cleanup --
     test('ending a session kills its link', async () => {
         await expect(phone.locator('#sessions li').first()).toBeVisible();

@@ -47,12 +47,20 @@ function setProxy(id, proxyId) {
     cache.delete(id);
 }
 
+/** Moves a session to another upstream proxy (and its pool). Takes effect on the next request (~2 s cache). */
+function setPoolAndProxy(id, poolId, proxyId) {
+    db.get().prepare(`UPDATE sessions SET pool_id = ?, proxy_id = ?, ${db.TOUCH} WHERE id = ?`).run(poolId, proxyId, ...db.touch(), id);
+    cache.delete(id);
+}
+
 function listActiveForUser(userId) {
     return db
         .get()
         .prepare(
-            `SELECT s.id, s.start_url, s.created_at, s.last_seen_at, s.requests, s.bytes, p.name AS pool_name
-             FROM sessions s LEFT JOIN proxy_pools p ON p.id = s.pool_id
+            `SELECT s.id, s.start_url, s.created_at, s.last_seen_at, s.requests, s.bytes, s.pool_id, s.proxy_id, p.name AS pool_name,
+                    p.owner_user_id AS pool_owner, x.protocol AS proxy_protocol, x.host AS proxy_host, x.port AS proxy_port,
+                    x.username AS proxy_username, x.status AS proxy_status, x.latency_ms AS proxy_latency_ms
+             FROM sessions s LEFT JOIN proxy_pools p ON p.id = s.pool_id LEFT JOIN proxies x ON x.id = s.proxy_id
              WHERE s.user_id = ? AND s.ended_at IS NULL AND s.end_requested = 0
              ORDER BY s.last_seen_at DESC`
         )
@@ -174,6 +182,7 @@ function pruneEnded(olderThanDays = 30) {
 }
 
 module.exports = {
+    setPoolAndProxy,
     pageActive,
     activeSummary,
     create,

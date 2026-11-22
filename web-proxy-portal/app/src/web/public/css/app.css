@@ -470,3 +470,20 @@ td.bad { color: var(--danger); font-weight: 600; }
     .topbar .theme-switch { border: 0; padding: 0; background: transparent; }
     .topbar .theme-switch button:not([aria-pressed="true"]) { display: none; }
 }
+
+/* Session proxy: status dot, "via ..." line, picker dialog */
+.dot { display: inline-block; width: 0.5rem; height: 0.5rem; border-radius: 50%; background: var(--subtle); margin-right: 0.375rem; vertical-align: 0.05rem; }
+.dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); } .dot.bad { background: var(--danger); }
+.via-line { font-family: var(--mono); font-size: 0.75rem; }
+.rows .meta.via-line { white-space: normal; overflow-wrap: anywhere; } /* show the full proxy + pool, even on phones */
+.proxy-dialog { width: min(34rem, 100%); }
+.proxy-list { max-height: min(55vh, 28rem); overflow-y: auto; margin: 0.75rem -0.25rem 0; padding: 0 0.25rem; }
+.proxy-group { border: 0; margin: 0 0 0.75rem; padding: 0; }
+.proxy-group legend { font-size: 0.6875rem; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--subtle); padding: 0 0 0.25rem; }
+.proxy-option { display: flex; gap: 0.625rem; align-items: flex-start; padding: 0.5rem 0.625rem; border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 0.375rem; cursor: pointer; }
+.proxy-option:hover { background: var(--hover); }
+.proxy-option:has(input:checked) { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.proxy-option.disabled { opacity: 0.55; cursor: not-allowed; }
+.proxy-option input { margin-top: 0.2rem; }
+.proxy-option .mono { font-size: 0.8125rem; overflow-wrap: anywhere; }
+.proxy-option .meta { display: block; font-size: 0.75rem; color: var(--muted); margin-top: 0.125rem; }
