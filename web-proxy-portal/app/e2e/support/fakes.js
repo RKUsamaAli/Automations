@@ -145,7 +145,21 @@ function startUpstreamProxy({ port, name, user, pass, sitePort }) {
             sock.write('HTTP/1.1 200 Connection Established\r\n\r\n');
             if (head && head.length) up.write(head);
             up.pipe(sock);
-            sock.pipe(up);
+            if (Number(p) === 80) {
+                // plain HTTP through the tunnel (e.g. the exit-IP check): tag the first
+                // request with this proxy's name, like the forward path does
+                let first = true;
+                sock.on('data', (d) => {
+                    if (first) {
+                        first = false;
+                        const s = d.toString('latin1');
+                        const i = s.indexOf('\r\n');
+                        if (i > 0) return up.write(Buffer.from(s.slice(0, i + 2) + `x-via-upstream: ${name}\r\n` + s.slice(i + 2), 'latin1'));
+                    }
+                    up.write(d);
+                });
+                sock.on('end', () => up.end());
+            } else sock.pipe(up);
         });
         up.on('error', () => sock.destroy());
         sock.on('error', () => up.destroy());

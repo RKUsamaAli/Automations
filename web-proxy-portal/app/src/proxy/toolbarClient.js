@@ -54,7 +54,7 @@ function toolbarScript(cfg, page) {
     '.sm{height:28px;padding:0 9px;font-size:12px}.ghost{border-color:transparent;background:none}' +
     '.sec{margin-top:10px;padding-top:10px;border-top:1px solid #eef0f3}.h{font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#6b7380;margin:0 0 6px;display:flex;justify-content:space-between;align-items:center}' +
     '.conn{display:grid;gap:3px}.row{display:flex;gap:8px;align-items:center}.ip{font:600 15px/1.3 ui-monospace,Menlo,monospace}.muted{color:#6b7380;font-size:12px}.mono{font-family:ui-monospace,Menlo,monospace}' +
-    '.list{display:grid;gap:2px}.item{display:flex;gap:8px;align-items:center;width:100%;text-align:left;border:0;background:none;padding:7px 8px;border-radius:8px;cursor:pointer;font:inherit;color:inherit}' +
+    '.list{display:grid;grid-template-columns:minmax(0,1fr);gap:2px}.item{display:flex;gap:8px;align-items:center;width:100%;text-align:left;border:0;background:none;padding:7px 8px;border-radius:8px;cursor:pointer;font:inherit;color:inherit}' +
     '.item:hover,.item:focus-visible{background:#f3f5f8;outline:none}.item.sel{background:#eef2ff;font-weight:600}.item[disabled]{opacity:.5;cursor:not-allowed}.item .grow{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
     '.score{min-width:28px;text-align:center;font-size:11px;font-weight:600;padding:1px 5px;border-radius:6px;background:#eef0f3;color:#5f6b7a}.score.good{background:#e3f4e5;color:#1f6b25}.score.fair{background:#fff1d6;color:#8a5a00}.score.poor{background:#fde4e4;color:#a32020}' +
     '.spin{width:14px;height:14px;border-radius:50%;border:2px solid rgba(36,83,212,.25);border-top-color:#2453d4;animation:pp-spin .8s linear infinite;flex:none}' +
@@ -185,7 +185,14 @@ function toolbarScript(cfg, page) {
     });
     filter.addEventListener('input', applyFilter);
 
+    function fitPanel() {
+      // never run off the screen: use the space above / below the button
+      var r = fab.getBoundingClientRect();
+      var room = pos.top > 50 ? r.top - 16 : window.innerHeight - r.bottom - 16;
+      panel.style.maxHeight = Math.max(220, Math.min(620, room)) + 'px';
+    }
     function open() {
+      fitPanel();
       panel.hidden = false;
       fab.setAttribute('aria-expanded', 'true');
       if (!addr.value && C.page && C.page.url) addr.value = C.page.url;

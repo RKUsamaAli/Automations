@@ -19,6 +19,13 @@
 const { test, expect } = require('@playwright/test');
 const { state, shot, login, IPHONE, DESKTOP } = require('../support/helpers');
 
+/** Leaves a proxied page the way a user does: toolbar button -> "Back to portal". */
+async function backToPortal(page) {
+    const bar = page.locator('portal-toolbar');
+    await bar.getByRole('button', { name: /Portal toolbar/ }).click();
+    await bar.getByRole('button', { name: /Back to portal/ }).click();
+}
+
 test.describe.serial('full product journey', () => {
     const S = state();
     const user = { name: `alice${S.run}`, email: `alice${S.run}@example.com`, pass: 'Alice-pass-123', newPass: 'Alice-pass-456' };
@@ -182,7 +189,7 @@ test.describe.serial('full product journey', () => {
         expect(new URL(proxiedUrl).hostname).toBe('browse.localtest');
         await expect(phone.locator('#via-name')).toHaveText('Admin provider (US)');
         await expect(phone.locator(`#portal-ribbon-${S.run}`)).toHaveText('Injected by the portal on shop.localtest');
-        await expect(phone.locator('#__portal_home')).toBeVisible();
+        await expect(phone.locator('portal-toolbar').getByRole('button', { name: /Portal toolbar/ })).toBeVisible(); // floating toolbar
         await shot(phone, '11-proxied-site-iphone');
     });
 
@@ -196,14 +203,14 @@ test.describe.serial('full product journey', () => {
     });
 
     test('Portal button returns to the portal; session is listed and can be resumed', async () => {
-        await phone.locator('#__portal_home').click();
+        await backToPortal(phone);
         await expect(phone).toHaveURL(S.appUrl + '/');
         const session = phone.locator('#sessions li', { hasText: 'shop.localtest' });
         await expect(session).toBeVisible();
         await shot(phone, '13-sessions-iphone');
         await session.getByRole('button', { name: 'Resume' }).click();
         await expect(phone.getByText(`Signed in as ${user.name}`)).toBeVisible();
-        await phone.locator('#__portal_home').click();
+        await backToPortal(phone);
     });
 
     // ---------------------------------------------------------- own proxy --
@@ -262,7 +269,7 @@ test.describe.serial('full product journey', () => {
         await expect(phone.locator('#via-name')).toHaveText('Your own proxy');
         ownProxyUrl = phone.url();
         await shot(phone, '15-proxied-via-own-proxy-iphone');
-        await phone.locator('#__portal_home').click();
+        await backToPortal(phone);
     });
 
     test('floating toolbar on the website: exit IP + location, address bar, switch proxy', async () => {
@@ -323,7 +330,7 @@ test.describe.serial('full product journey', () => {
             await phone.goto(ownProxyUrl);
             await expect(phone.locator('#via-name')).toHaveText('Admin provider (US)', { timeout: 1000 });
         }).toPass({ timeout: 10000 });
-        await phone.locator('#__portal_home').click();
+        await backToPortal(phone);
     });
 
     // ------------------------------------------------------------ cleanup --
