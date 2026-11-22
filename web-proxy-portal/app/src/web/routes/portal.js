@@ -18,6 +18,8 @@
 const express = require('express');
 const config = require('../../config');
 const sites = require('../../services/sites');
+const search = require('../../services/search');
+const RateLimiter = require('../../lib/rateLimiter');
 const { idOrNull } = require('../../lib/ids');
 const context = require('../../lib/context');
 const suggest = require('../../services/suggest');
@@ -82,6 +84,16 @@ router.get('/pools', (req, res) => {
     );
 });
 
+// Search suggestions for the address bar (engine's own, cached; 20/10 s per user).
+const suggestLimiter = new RateLimiter(10000);
+router.get('/search-suggest', async (req, res) => {
+    const q = String(req.query.q || '');
+    const kind = search.classify(q);
+    if (!suggestLimiter.hit(`sg:${req.user.id}`, 20)) return res.json({ engine: search.engine().name, kind: kind.type, suggestions: [] });
+    res.set('Cache-Control', 'private, max-age=300');
+    res.json({ engine: search.engine().name, kind: kind.type, suggestions: kind.type === 'search' || q.length < 40 ? await search.suggestions(q) : [] });
+});
+
 // Address-bar suggestions: the user's recently opened pages.
 router.get('/recent', (req, res) => {
     res.json(suggest.recentUrls(req.user.id, req.query.q || ''));
@@ -110,13 +122,18 @@ router.post('/browse', (req, res) => {
     }
 
     let target;
+    let searchQuery = null;
     try {
         if (siteId) {
             const site = sites.listEnabled().find((s) => s.id === String(siteId));
             if (!site) return res.status(404).json({ error: 'Site not found' });
             target = site.start_url;
         } else {
-            target = normalizeUrl(url);
+            // Words -> results page of the search engine; an address -> that site.
+            const kind = search.classify(url);
+            if (kind.type === 'empty') throw new Error('Type a website address or something to search for');
+            target = normalizeUrl(kind.type === 'search' ? kind.url : kind.input);
+            if (kind.type === 'search') searchQuery = kind.query;
         }
     } catch (e) {
         return res.status(400).json({ error: e.message });
@@ -132,6 +149,7 @@ router.post('/browse', (req, res) => {
         return res.status(429).json({ error: `You already have ${max} active sessions. End one before starting another.` });
     }
 
+    if (searchQuery) events.record('search', { userId: user.id, detail: `${search.engine().name}: ${searchQuery.slice(0, 200)}` });
     const ticket = mintTicket({ uid: user.id, v: user.token_version, url: target, pool: poolId, cid: clientId(), until: req.token && req.token.idx });
     res.json({ redirect: `${config.proxyBaseUrl}/__portal/start?t=${encodeURIComponent(ticket)}` });
 });

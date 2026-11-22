@@ -39,8 +39,11 @@
     --control-h: 2.125rem; /* 34px */
     color-scheme: light dark;
 }
+/* Dark theme: used when the user picks Dark, or picks System (default) and the
+   device is in dark mode. The choice is set by js/theme.js as
+   <html data-theme="light|dark"> (no attribute = follow the device). */
 @media (prefers-color-scheme: dark) {
-    :root {
+    :root:not([data-theme="light"]) {
         --bg: #0e1014;
         --surface: #15181e;
         --surface-2: #1b1f26;
@@ -64,6 +67,31 @@
         --overlay-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
     }
 }
+:root[data-theme="dark"] {
+        --bg: #0e1014;
+        --surface: #15181e;
+        --surface-2: #1b1f26;
+        --hover: #1e232b;
+        --border: #272c35;
+        --border-strong: #353b46;
+        --text: #e7e9ed;
+        --muted: #a0a7b2;
+        --subtle: #7c8490;
+        --accent: #6f97ff;
+        --accent-hover: #8cabff;
+        --accent-soft: #1a2440;
+        --on-accent: #0b1020;
+        --danger: #ff7b72;
+        --danger-soft: #34191a;
+        --ok: #4ccf8b;
+        --ok-soft: #12291d;
+        --warn: #e8b45c;
+        --warn-soft: #30260f;
+        --info-soft: #1b2029;
+        --overlay-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+    }
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
 /* Touch screens: bigger targets, 16px inputs (no iOS zoom). */
 @media (pointer: coarse) {
     :root { --control-h: 2.75rem; }
@@ -424,3 +452,13 @@ td.bad { color: var(--danger); font-weight: 600; }
 .reauth { z-index: 90; backdrop-filter: blur(2px); }
 .reauth .field { margin-top: 0.75rem; }
 .reauth-user { font-weight: 600; padding: 0.375rem 0; overflow-wrap: anywhere; }
+
+/* Theme switch: System / Light / Dark (js/theme.js) */
+.theme-switch { display: inline-flex; border: 1px solid var(--border); border-radius: 999px; padding: 2px; gap: 2px; background: var(--surface); }
+.theme-switch button { height: 1.75rem; min-height: 0; width: 1.75rem; padding: 0; border: 0; border-radius: 999px; background: transparent; color: var(--muted); display: inline-grid; place-items: center; }
+.theme-switch button:hover { color: var(--text); background: var(--hover); }
+.theme-switch button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); }
+.theme-switch svg { width: 1rem; height: 1rem; }
+@media (pointer: coarse) { .theme-switch button { width: 2.25rem; height: 2.25rem; } }
+.auth-theme { position: fixed; top: 0.75rem; right: 0.75rem; z-index: 5; }
+.sidebar-foot .theme-switch { margin: 0.25rem 0.5rem 0.5rem; }

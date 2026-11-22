@@ -443,6 +443,12 @@
         document.body.appendChild(bottom);
         document.body.classList.add('has-bottomnav');
         $('#shell-logout').addEventListener('click', function () { logout(false); });
+        if (window.PortalTheme) {
+            var slot = document.createElement('span');
+            slot.className = 'theme-slot';
+            $('.user-menu', header).insertBefore(slot, $('.user-menu', header).firstChild);
+            window.PortalTheme.mount(slot);
+        }
         return info;
     }
 

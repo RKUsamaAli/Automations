@@ -1314,6 +1314,13 @@
                 { name: 'allowlist_enabled', label: 'Only allow configured sites and the extra domains below', type: 'checkbox', value: s.allowlist_enabled },
                 { name: 'allowlist_extra', label: 'Extra allowed domains', type: 'textarea', value: s.allowlist_extra, hint: 'One pattern per line or comma separated, e.g. *.example.com' },
                 { name: 'allowlist_strict', label: 'Also block images and scripts from other domains (may break sites using CDNs)', type: 'checkbox', value: s.allowlist_strict }
+            ]],
+            ['Search', [
+                { name: 'search_engine', label: 'Search engine for the address bar', type: 'select', value: s.search_engine, options: [{ value: 'google', label: 'Google' }, { value: 'duckduckgo', label: 'DuckDuckGo' }, { value: 'bing', label: 'Bing' }, { value: 'custom', label: 'Custom (URLs below)' }],
+                    hint: 'Words typed in the Browse address bar open this engine\'s results through the proxy. With the allowlist on, add the engine\'s domain to the extra allowed domains.' },
+                { name: 'search_suggestions', label: 'Suggest search terms while typing (asks the search engine)', type: 'checkbox', value: s.search_suggestions },
+                { name: 'search_url_custom', label: 'Custom results URL', value: s.search_url_custom, hint: '{q} is replaced by the words, e.g. https://search.example.com/?q={q}' },
+                { name: 'search_suggest_url_custom', label: 'Custom suggestions URL (optional)', value: s.search_suggest_url_custom, hint: 'Must return OpenSearch JSON: ["words", ["suggestion 1", "suggestion 2"]]' }
             ]]
         ];
         var fieldHtml = function (f) {
@@ -1359,6 +1366,7 @@
     }
     P.$all('#tabs button').forEach(function (b) { b.addEventListener('click', function () { show(b.getAttribute('data-tab')); }); });
     P.$('#logout').addEventListener('click', function () { P.logout(false); });
+    if (window.PortalTheme) window.PortalTheme.mount(P.$('#theme-slot'));
     window.addEventListener('hashchange', function () { show(location.hash.slice(1) || 'dashboard'); });
     P.api('GET', '/api/admin/overview').then(function (o) {
         P.$('#release').textContent = o.release;

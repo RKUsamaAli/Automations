@@ -207,6 +207,35 @@ test.describe.serial('full product journey', () => {
     });
 
     // ---------------------------------------------------------- own proxy --
+    test('address bar searches like Google: suggestions, results page, pick a result', async () => {
+        // admin points search at the fake engine (Settings -> Search -> Custom)
+        await admin.getByRole('button', { name: 'Settings' }).click();
+        await admin.locator('#set-search_engine').selectOption('custom');
+        await admin.locator('#set-search_url_custom').fill('http://shop.localtest/search?q={q}');
+        await admin.locator('#set-search_suggest_url_custom').fill(`http://127.0.0.1:${S.sitePort || 17001}/suggest?q={q}`);
+        await admin.locator('#save-settings').click();
+        await expect(admin.getByText('Settings saved')).toBeVisible();
+        await phone.goto(S.appUrl + '/');
+        await phone.waitForTimeout(3500); // settings cache in every process
+        await phone.locator('#url').fill('lemons');
+        await expect(phone.getByRole('option', { name: /lemons\s*Search/ }).first()).toBeVisible();
+        await expect(phone.getByRole('group', { name: 'Search suggestions' })).toContainText('lemons recipes');
+        await shot(phone, '10c-search-suggestions-iphone', { fullPage: false });
+        await phone.getByRole('option', { name: /lemons recipes/ }).click();
+        await expect(phone.locator('#search-title')).toHaveText('Results for "lemons recipes"');
+        expect(phone.url()).toContain('/http://shop.localtest/search?q=lemons');
+        await shot(phone, '10d-search-results-iphone', { fullPage: false });
+        await phone.locator('#result-1').click();
+        await expect(phone.locator('#shop-title')).toHaveText('Fresh picks today');
+        await phone.goto(S.appUrl + '/');
+        // typing an address still opens the site directly
+        await phone.locator('#url').fill('shop.localtest/login');
+        await phone.locator('#url').press('Escape');
+        await phone.locator('#go').click();
+        await expect(phone.locator('#shop-login')).toBeVisible();
+        await phone.goto(S.appUrl + '/');
+    });
+
     test('user adds their own proxy and it becomes Online', async () => {
         await phone.getByRole('link', { name: 'My proxies' }).first().click();
         await expect(phone.getByRole('heading', { name: 'My proxies', level: 1 })).toBeVisible();

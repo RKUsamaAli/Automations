@@ -3,6 +3,13 @@
    ============================================================================= */
 (function () {
     'use strict';
+    // Theme switch in the corner of the sign-in / sign-up pages.
+    if (window.PortalTheme) {
+        var corner = document.createElement('div');
+        corner.className = 'auth-theme';
+        document.body.appendChild(corner);
+        window.PortalTheme.mount(corner);
+    }
     var P = window.Portal;
     var params = new URLSearchParams(location.search);
     P.setupReveal(document);

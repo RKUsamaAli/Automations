@@ -462,3 +462,17 @@ test('JWT: "sign out everywhere" revokes tokens that are still within their life
     assert.equal(r.status, 401);
     assert.equal((await b.req('POST', '/api/auth/refresh')).json.code, 'not_signed_in');
 });
+
+test('browse: words open the search engine results page through the proxy', async () => {
+    const c = client();
+    await c.req('GET', '/login');
+    await c.req('POST', '/api/auth/login', { username: 'user1', password: 'userpass123' });
+    const r = await c.req('POST', '/api/portal/browse', { url: 'best pizza near me' });
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    const ticket = readTicket(new URL(r.json.redirect).searchParams.get('t'));
+    assert.equal(ticket.url, 'https://www.google.com/search?q=best%20pizza%20near%20me');
+    const s = await c.req('GET', '/api/portal/search-suggest?q=example.com');
+    assert.equal(s.status, 200);
+    assert.equal(s.json.kind, 'url');
+    assert.equal(s.json.engine, 'Google');
+});

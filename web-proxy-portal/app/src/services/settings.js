@@ -31,6 +31,12 @@ const DEFAULTS = {
     upstream_fallback: 'deny', // 'deny' = refuse when no healthy proxy, 'direct' = use the server's own IP
     upstream_failover: true, // move a session to another proxy of the same pool if its proxy dies
 
+    // --- Search (Browse page address bar) ---
+    search_engine: 'google', // google | duckduckgo | bing | custom
+    search_url_custom: '', // custom results page, {q} = the words, e.g. https://search.example/?q={q}
+    search_suggest_url_custom: '', // optional, OpenSearch JSON ["q", ["a", "b"]], {q} = the words
+    search_suggestions: true, // suggest search terms while typing (asks the search engine)
+
     // --- Branding ---
     portal_title: 'Web Portal',
     portal_notice: '', // optional message shown on the landing page
@@ -39,7 +45,8 @@ const DEFAULTS = {
 
 const ENUMS = {
     registration_mode: ['open', 'approval', 'closed'],
-    upstream_fallback: ['deny', 'direct']
+    upstream_fallback: ['deny', 'direct'],
+    search_engine: ['google', 'duckduckgo', 'bing', 'custom']
 };
 
 const cache = new TtlCache(3000); // short: several processes share the DB, admin changes must show up quickly

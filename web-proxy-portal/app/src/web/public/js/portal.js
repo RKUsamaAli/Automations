@@ -34,7 +34,7 @@
         e.preventDefault();
         var url = P.$('#url').value.trim();
         if (!url) {
-            P.showError(goError, 'Enter a website address, for example example.com');
+            P.showError(goError, 'Type a web address (example.com) or something to search for');
             P.$('#url').setAttribute('aria-invalid', 'true');
             return P.$('#url').focus();
         }
@@ -43,15 +43,33 @@
     });
     P.$('#refresh').addEventListener('click', loadSessions);
 
-    // Address bar suggestions: the admin's site tiles + pages this user opened before.
-    // Picking one opens it straight away.
+    // Address bar: words -> search results (through the proxy), an address -> that site.
+    // Suggestions while typing: the main action first ("Search Google for ..." /
+    // "Go to ..."), then the admin's sites, pages opened before and the search
+    // engine's own suggestions. Picking any of them opens it straight away.
+    var LOOKS_LIKE_URL = /^[a-z][a-z0-9+.-]*:\/\/|^[^\s/?#]+\.[a-z][a-z0-9-]+(?::\d+)?(?:[/?#]\S*)?$|^localhost(?::\d+)?/i;
+    var engineName = 'Google';
     P.suggest(P.$('#url'), {
         source: function (q) {
-            var sites = P.filterOptions(siteList.map(function (s) { return { value: s.startUrl, label: s.name, hint: s.host, siteId: s.id }; }), q, 5);
-            return P.api('GET', '/api/portal/recent?q=' + encodeURIComponent(q)).then(function (recent) {
+            q = q.trim();
+            var sites = P.filterOptions(siteList.map(function (s) { return { value: s.startUrl, label: s.name, hint: s.host, siteId: s.id }; }), q, 4);
+            var isUrl = LOOKS_LIKE_URL.test(q);
+            var main = q ? [{ value: q, label: isUrl ? q : q, hint: isUrl ? 'Go to this address' : 'Search ' + engineName, action: true }] : [];
+            return Promise.all([
+                P.api('GET', '/api/portal/recent?q=' + encodeURIComponent(q)).catch(function () { return []; }),
+                q.length >= 2 && !isUrl ? P.api('GET', '/api/portal/search-suggest?q=' + encodeURIComponent(q)).catch(function () { return { suggestions: [] }; }) : Promise.resolve({ suggestions: [] })
+            ]).then(function (r) {
                 var known = {};
                 sites.forEach(function (s) { known[s.hint] = true; });
-                return [{ label: 'Your sites', items: sites }, { label: 'Recently opened', items: recent.filter(function (r) { return !known[r.label] && !known['www.' + r.label]; }) }];
+                if (r[1].engine) { engineName = r[1].engine; if (main[0] && !isUrl) main[0].hint = 'Search ' + engineName; }
+                var terms = (r[1].suggestions || []).filter(function (t) { return t.toLowerCase() !== q.toLowerCase(); }).slice(0, 5)
+                    .map(function (t) { return { value: t, label: t, hint: 'Search', search: true }; });
+                return [
+                    { items: main },
+                    { label: 'Your sites', items: sites },
+                    { label: 'Recently opened', items: r[0].filter(function (x) { return !known[x.label] && !known['www.' + x.label]; }).slice(0, 4) },
+                    { label: 'Search suggestions', items: terms }
+                ];
             });
         },
         onPick: function (item) {

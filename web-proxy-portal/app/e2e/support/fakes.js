@@ -45,6 +45,19 @@ function startTargetSite(port) {
             res.writeHead(204);
             return res.end();
         }
+        // Fake search engine (Admin -> Settings -> Search -> Custom) for the address-bar test.
+        if (url.pathname === '/suggest') {
+            const q = url.searchParams.get('q') || '';
+            res.writeHead(200, { 'content-type': 'application/json' });
+            return res.end(JSON.stringify([q, [`${q} recipes`, `${q} prices`, `${q} delivery`]]));
+        }
+        if (url.pathname === '/search') {
+            const q = (url.searchParams.get('q') || '').replace(/[<>&"]/g, '');
+            res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+            return res.end(page(`${q} - Demo Search`, `<div class="card"><h2 id="search-title">Results for "${q}"</h2>
+<ol class="results"><li><a id="result-1" href="/">Demo Shop - fresh ${q}</a><p>Fresh picks delivered today.</p></li>
+<li><a href="/login">Sign in to Demo Shop</a><p>Your orders and account.</p></li></ol></div>`, via));
+        }
         if (url.pathname === '/login' && req.method === 'POST') {
             let body = '';
             req.on('data', (d) => (body += d));
