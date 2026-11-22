@@ -41,7 +41,7 @@ function choices(user, session, { admin = false } = {}) {
         const proxies = db
             .get()
             .prepare(
-                `SELECT id, protocol, host, port, username, status, latency_ms, enabled, exit_ip, exit_country, exit_country_code, exit_city, exit_isp,
+                `SELECT id, protocol, host, port, username, status, latency_ms, enabled, exit_ip, exit_country, exit_country_code, exit_city, exit_isp, exit_timezone,
                         (SELECT COUNT(*) FROM sessions s WHERE s.proxy_id = proxies.id AND s.ended_at IS NULL) AS active_sessions
                  FROM proxies WHERE pool_id = ? ORDER BY (status = 'dead'), latency_ms IS NULL, latency_ms, id`
             )

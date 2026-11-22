@@ -51,14 +51,23 @@ function startTargetSite(port) {
             const own = via === 'Your own proxy';
             res.writeHead(200, { 'content-type': 'application/json' });
             return res.end(JSON.stringify(own
-                ? { ip: '203.0.113.20', country: 'Spain', country_code: 'ES', city: 'Madrid', connection: { isp: 'Demo Telecom ES' } }
-                : { ip: '198.51.100.10', country: 'United States', country_code: 'US', city: 'New York', connection: { isp: 'Demo Hosting US' } }));
+                ? { ip: '203.0.113.20', country: 'Spain', country_code: 'ES', city: 'Madrid', timezone: { id: 'Europe/Madrid' }, connection: { isp: 'Demo Telecom ES' } }
+                : { ip: '198.51.100.10', country: 'United States', country_code: 'US', city: 'New York', timezone: { id: 'America/New_York' }, connection: { isp: 'Demo Hosting US' } }));
         }
         // Fake search engine (Admin -> Settings -> Search -> Custom) for the address-bar test.
         if (url.pathname === '/suggest') {
             const q = url.searchParams.get('q') || '';
             res.writeHead(200, { 'content-type': 'application/json' });
             return res.end(JSON.stringify([q, [`${q} recipes`, `${q} prices`, `${q} delivery`]]));
+        }
+        // Fake Google results page (GOOGLE_SEARCH_URL=http://google.localtest/google?q={q}),
+        // read by the server's search browser: result links are <a><h3> inside #search.
+        if (url.pathname === '/google') {
+            const q = (url.searchParams.get('q') || '').replace(/[<>&"]/g, '');
+            res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+            return res.end(`<!doctype html><title>${q} - Google</title><div id="search">
+<div class="g"><a href="http://shop.localtest/"><h3>Demo Shop - fresh ${q}</h3></a><div class="VwiC3b">Fresh ${q} delivered today. Seen via ${via || 'direct'}.</div></div>
+<div class="g"><a href="/url?q=http://shop.localtest/login&sa=U"><h3>Sign in to Demo Shop</h3></a><div class="VwiC3b">Your orders and account.</div></div></div>`);
         }
         if (url.pathname === '/search') {
             const q = (url.searchParams.get('q') || '').replace(/[<>&"]/g, '');
