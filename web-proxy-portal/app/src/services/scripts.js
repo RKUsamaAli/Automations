@@ -45,31 +45,28 @@ function save({ id, name, domains = '*', runAt = 'document-end', loadOrder = 100
     } catch (e) {
         throw new Error(`JavaScript syntax error: ${e.message}`);
     }
-    const now = Date.now();
     const conn = db.get();
     let scriptId = id;
     if (id) {
-        conn.prepare('UPDATE scripts SET name = ?, domains = ?, run_at = ?, load_order = ?, enabled = ?, code = ?, updated_at = ? WHERE id = ?').run(
+        conn.prepare(`UPDATE scripts SET name = ?, domains = ?, run_at = ?, load_order = ?, enabled = ?, code = ?, ${db.TOUCH} WHERE id = ?`).run(
             name,
             patterns.join(','),
             runAt,
             Number(loadOrder) || 0,
             enabled ? 1 : 0,
             code,
-            now,
+            ...db.touch(),
             id
         );
     } else {
-        scriptId = conn
-            .prepare('INSERT INTO scripts (name, domains, run_at, load_order, enabled, code, updated_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-            .run(name, patterns.join(','), runAt, Number(loadOrder) || 0, enabled ? 1 : 0, code, now, now).lastInsertRowid;
+        scriptId = db.insert('scripts', { name, domains: patterns.join(','), run_at: runAt, load_order: Number(loadOrder) || 0, enabled: enabled ? 1 : 0, code });
     }
     cache.clear();
     return conn.prepare('SELECT * FROM scripts WHERE id = ?').get(scriptId);
 }
 
 function setEnabled(id, enabled) {
-    db.get().prepare('UPDATE scripts SET enabled = ?, updated_at = ? WHERE id = ?').run(enabled ? 1 : 0, Date.now(), id);
+    db.get().prepare(`UPDATE scripts SET enabled = ?, ${db.TOUCH} WHERE id = ?`).run(enabled ? 1 : 0, ...db.touch(), id);
     cache.clear();
 }
 

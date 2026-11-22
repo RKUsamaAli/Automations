@@ -351,7 +351,7 @@
             cfg.fields.forEach(function (f) {
                 if (f.type === 'info') return;
                 var el = P.$('#f-' + f.name);
-                if (f.type === 'users') { values[f.name] = P.$all('input:checked', el).map(function (i) { return Number(i.value); }); return; }
+                if (f.type === 'users') { values[f.name] = P.$all('input:checked', el).map(function (i) { return i.value; }); return; }
                 values[f.name] = f.type === 'checkbox' ? el.checked : el.value;
             });
             var done = P.busy(P.$('#modal-submit'), 'Saving');
@@ -539,7 +539,7 @@
                     { name: 'logoutEverywhere', label: 'Sign out everywhere and end all sessions', type: 'checkbox' }
                 ],
                 onSubmit: async function (v) {
-                    var patch = { enabled: v.enabled, role: v.role, email: v.email, poolId: v.poolId ? Number(v.poolId) : null, rateLimitRpm: v.rateLimitRpm, bandwidthLimitMbDay: v.bandwidthLimitMbDay, note: v.note };
+                    var patch = { enabled: v.enabled, role: v.role, email: v.email, poolId: v.poolId || null, rateLimitRpm: v.rateLimitRpm, bandwidthLimitMbDay: v.bandwidthLimitMbDay, note: v.note };
                     if (v.password) patch.password = v.password;
                     await P.api('PATCH', '/api/admin/users/' + u.id, patch);
                     if (v.logoutEverywhere) await P.api('POST', '/api/admin/users/' + u.id + '/logout');
@@ -583,15 +583,15 @@
             '<div id="pool-detail"></div>';
 
         P.$('#add').addEventListener('click', function () { poolForm(null); });
-        on('[data-edit]', 'click', function (btn) { poolForm(state.pools.find(function (p) { return p.id === Number(btn.getAttribute('data-edit')); })); });
+        on('[data-edit]', 'click', function (btn) { poolForm(state.pools.find(function (p) { return p.id === btn.getAttribute('data-edit'); })); });
         on('[data-del]', 'click', function (btn) {
             confirmed('All proxies of this pool are deleted. Sessions using them lose their proxy.', async function () {
                 await P.api('DELETE', '/api/admin/pools/' + btn.getAttribute('data-del'));
                 poolsView();
             }, { title: 'Delete this pool?', confirmLabel: 'Delete pool', danger: true });
         });
-        on('[data-open]', 'click', function (btn) { poolDetail(Number(btn.getAttribute('data-open'))); });
-        on('[data-access]', 'click', function (btn) { poolAccess(state.pools.find(function (p) { return p.id === Number(btn.getAttribute('data-access')); })); });
+        on('[data-open]', 'click', function (btn) { poolDetail(btn.getAttribute('data-open')); });
+        on('[data-access]', 'click', function (btn) { poolAccess(state.pools.find(function (p) { return p.id === btn.getAttribute('data-access'); })); });
         if (state.pools.length === 1) poolDetail(state.pools[0].id);
     }
 
@@ -852,7 +852,7 @@
             });
         }
         P.$('#add').addEventListener('click', function () { form(null); });
-        on('[data-edit]', 'click', function (btn) { form(list.find(function (s) { return s.id === Number(btn.getAttribute('data-edit')); })); });
+        on('[data-edit]', 'click', function (btn) { form(list.find(function (s) { return s.id === btn.getAttribute('data-edit'); })); });
         on('[data-del]', 'click', function (btn) {
             confirmed('The site is removed from the Browse page and the allowlist.', async function () {
                 await P.api('DELETE', '/api/admin/sites/' + btn.getAttribute('data-del'));
@@ -897,7 +897,7 @@
             });
         }
         P.$('#add').addEventListener('click', function () { form(null); });
-        on('[data-edit]', 'click', function (btn) { form(list.find(function (s) { return s.id === Number(btn.getAttribute('data-edit')); })); });
+        on('[data-edit]', 'click', function (btn) { form(list.find(function (s) { return s.id === btn.getAttribute('data-edit'); })); });
         on('[data-del]', 'click', function (btn) {
             confirmed('The script stops running on all pages.', async function () {
                 await P.api('DELETE', '/api/admin/scripts/' + btn.getAttribute('data-del'));

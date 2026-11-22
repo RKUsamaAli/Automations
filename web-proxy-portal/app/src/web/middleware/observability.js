@@ -16,6 +16,7 @@
 const crypto = require('crypto');
 const Breadcrumbs = require('../../lib/breadcrumbs');
 const errorReports = require('../../services/errorReports');
+const context = require('../../lib/context');
 const requestLog = require('../../services/requestLog');
 const metrics = require('../../services/metrics');
 const { redactUrl, safeHeaders, redactObject } = require('../../lib/redact');
@@ -37,6 +38,7 @@ const trailKey = (req) => (req.user ? `user:${req.user.id}` : `ip:${req.ip}`);
 /** Records each finished request into the user's trail (memory only). */
 function recordTrail(req, res, next) {
     if (req.path === '/healthz' || req.path.startsWith('/assets/')) return next();
+    const ctx = context.get(); // captured now: the 'finish' callback runs outside the request context
     res.on('finish', () => {
         const ms = Date.now() - req.startedAt;
         const isApi = req.originalUrl.startsWith('/api/');
@@ -50,7 +52,9 @@ function recordTrail(req, res, next) {
             host: req.hostname,
             status: res.statusCode,
             ms,
-            requestId: req.id
+            requestId: req.id,
+            ip: req.ip,
+            clientId: ctx ? ctx.clientId : null
         });
         trail.add(trailKey(req), {
             type: isApi ? 'api' : 'page',

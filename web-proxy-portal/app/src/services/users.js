@@ -6,10 +6,11 @@
 const db = require('../db');
 const { hashPassword, verifyPassword, randomToken, sha256 } = require('../lib/crypto');
 const TtlCache = require('../lib/ttlCache');
+const { newId, idOrNull } = require('../lib/ids');
 const paging = require('../lib/paging');
 
 const PUBLIC_FIELDS = `id, username, email, role, enabled, pending, pool_id, rate_limit_rpm, bandwidth_limit_mb_day,
-    token_version, note, created_at, last_login_at, timezone,
+    token_version, note, created_at, created_by, updated_at, updated_by, last_login_at, timezone,
     (password_hash IS NOT NULL) AS has_password, (access_token_hash IS NOT NULL) AS has_token`;
 
 // Short cache used by the proxy engine on every request.
@@ -58,7 +59,7 @@ function page({ q = '', pending = false } = {}, { cursor = null, limit } = {}) {
     const after = paging.decodeCursor(cursor);
     if (after) {
         where.push('(username COLLATE NOCASE > ? OR (username COLLATE NOCASE = ? AND id > ?))');
-        args.push(String(after[0]), String(after[0]), Number(after[1]));
+        args.push(String(after[0]), String(after[0]), String(after[1]));
     }
     args.push(n + 1);
     const rows = db
@@ -95,7 +96,7 @@ function pageSummary({ q = '' } = {}) {
  * when it changed, so normal requests cost nothing.
  */
 function setTimezone(id, tz) {
-    const changed = db.get().prepare('UPDATE users SET timezone = ? WHERE id = ? AND timezone IS NOT ?').run(tz, id, tz).changes;
+    const changed = db.get().prepare(`UPDATE users SET timezone = ?, ${db.TOUCH} WHERE id = ? AND timezone IS NOT ?`).run(tz, ...db.touch(), id, tz).changes;
     if (changed) cache.delete(id);
     return changed > 0;
 }
@@ -120,12 +121,12 @@ function validateEmail(email) {
     if (email && !/^[^\s@]{1,64}@[^\s@]{1,190}\.[^\s@]{2,}$/.test(String(email))) throw new Error('Enter a valid e-mail address');
 }
 
-const optInt = (v) => (v === '' || v === null || v === undefined ? null : Math.max(0, parseInt(v, 10) || 0));
+const optInt = (v) => (v === '' || v === null || v === undefined ? null : Math.max(0, Math.floor(Number(v)) || 0));
 
 /**
  * @returns {{ user: object, accessToken: string|null }} accessToken is shown ONCE.
  */
-function create({ username, password, email = null, role = 'user', pending = false, generateToken = false, poolId = null, rateLimitRpm = null, bandwidthLimitMbDay = null, note = null }) {
+function create({ username, password, email = null, role = 'user', pending = false, generateToken = false, poolId = null, rateLimitRpm = null, bandwidthLimitMbDay = null, note = null, selfCreated = false }) {
     validateUsername(username);
     validateEmail(email);
     if (!password && !generateToken) throw new Error('Provide a password or generate an access token');
@@ -133,26 +134,23 @@ function create({ username, password, email = null, role = 'user', pending = fal
     if (!['admin', 'user'].includes(role)) throw new Error('Invalid role');
     const accessToken = generateToken ? randomToken(18) : null;
     try {
-        const info = db
-            .get()
-            .prepare(
-                `INSERT INTO users (username, email, pending, password_hash, access_token_hash, role, pool_id, rate_limit_rpm, bandwidth_limit_mb_day, note, created_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-            )
-            .run(
-                username,
-                email ? String(email).trim().toLowerCase() : null,
-                pending ? 1 : 0,
-                password ? hashPassword(password) : null,
-                accessToken ? sha256(accessToken) : null,
-                role,
-                poolId || null,
-                optInt(rateLimitRpm),
-                optInt(bandwidthLimitMbDay),
-                note || null,
-                Date.now()
-            );
-        return { user: getById(info.lastInsertRowid), accessToken };
+        const newUserId = newId();
+        db.insert('users', {
+            id: newUserId,
+            username,
+            email: email ? String(email).trim().toLowerCase() : null,
+            pending: pending ? 1 : 0,
+            password_hash: password ? hashPassword(password) : null,
+            access_token_hash: accessToken ? sha256(accessToken) : null,
+            role,
+            pool_id: idOrNull(poolId),
+            rate_limit_rpm: optInt(rateLimitRpm),
+            bandwidth_limit_mb_day: optInt(bandwidthLimitMbDay),
+            note: note || null,
+            // self sign-up: the new user created their own account
+            ...(selfCreated ? { created_by: newUserId, updated_by: newUserId } : {})
+        });
+        return { user: getById(newUserId), accessToken };
     } catch (e) {
         if (String(e.message).includes('UNIQUE')) throw new Error('Username already exists');
         throw e;
@@ -173,7 +171,7 @@ function update(id, patch) {
         set('role', patch.role);
     }
     if (patch.enabled !== undefined) set('enabled', patch.enabled ? 1 : 0);
-    if (patch.poolId !== undefined) set('pool_id', patch.poolId || null);
+    if (patch.poolId !== undefined) set('pool_id', idOrNull(patch.poolId));
     if (patch.rateLimitRpm !== undefined) set('rate_limit_rpm', optInt(patch.rateLimitRpm));
     if (patch.bandwidthLimitMbDay !== undefined) set('bandwidth_limit_mb_day', optInt(patch.bandwidthLimitMbDay));
     if (patch.note !== undefined) set('note', patch.note || null);
@@ -191,8 +189,8 @@ function update(id, patch) {
         fields.push('token_version = token_version + 1');
     }
     if (fields.length) {
-        args.push(id);
-        db.get().prepare(`UPDATE users SET ${fields.join(', ')} WHERE id = ?`).run(...args);
+        args.push(...db.touch(), id);
+        db.get().prepare(`UPDATE users SET ${fields.join(', ')}, ${db.TOUCH} WHERE id = ?`).run(...args);
     }
     cache.delete(id);
     return getById(id);
@@ -201,13 +199,13 @@ function update(id, patch) {
 /** Creates a new access token (replacing the old one). Returns the plain token once. */
 function regenerateToken(id) {
     const token = randomToken(18);
-    db.get().prepare('UPDATE users SET access_token_hash = ? WHERE id = ?').run(sha256(token), id);
+    db.get().prepare(`UPDATE users SET access_token_hash = ?, ${db.TOUCH} WHERE id = ?`).run(sha256(token), ...db.touch(), id);
     cache.delete(id);
     return token;
 }
 
 function revokeToken(id) {
-    db.get().prepare('UPDATE users SET access_token_hash = NULL WHERE id = ?').run(id);
+    db.get().prepare(`UPDATE users SET access_token_hash = NULL, ${db.TOUCH} WHERE id = ?`).run(...db.touch(), id);
     cache.delete(id);
 }
 
@@ -252,11 +250,11 @@ function finishLogin(row) {
 /** Self-registration from the sign-up page. */
 function register({ username, email, password, needsApproval }) {
     validatePassword(password);
-    return create({ username, email, password, role: 'user', pending: !!needsApproval }).user;
+    return create({ username, email, password, role: 'user', pending: !!needsApproval, selfCreated: true }).user;
 }
 
 function approve(id) {
-    db.get().prepare('UPDATE users SET pending = 0, enabled = 1 WHERE id = ?').run(id);
+    db.get().prepare(`UPDATE users SET pending = 0, enabled = 1, ${db.TOUCH} WHERE id = ?`).run(...db.touch(), id);
     cache.delete(id);
     return getById(id);
 }
@@ -274,7 +272,7 @@ function changeOwnPassword(id, currentPassword, newPassword) {
 }
 
 function markLogin(id) {
-    db.get().prepare('UPDATE users SET last_login_at = ? WHERE id = ?').run(Date.now(), id);
+    db.get().prepare(`UPDATE users SET last_login_at = ?, updated_at = ?, updated_by = ? WHERE id = ?`).run(Date.now(), Date.now(), id, id); // the user signed themselves in
     return getById(id);
 }
 

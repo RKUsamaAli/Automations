@@ -114,7 +114,7 @@ test('metrics: samples per process; unclean previous exit is detected', () => {
 
 test('request log: "User activity" hides background reads but keeps actions and failures', () => {
     const requestLog = require('../src/services/requestLog');
-    const uid = 424242;
+    const uid = require('../src/lib/ids').newId();
     requestLog.add({ source: 'web', kind: 'api', userId: uid, method: 'GET', url: '/api/portal/sessions', status: 200 });
     requestLog.add({ source: 'web', kind: 'api', userId: uid, method: 'POST', url: '/api/portal/browse', status: 200 });
     requestLog.add({ source: 'web', kind: 'api', userId: uid, method: 'GET', url: '/api/portal/sites', status: 500 });

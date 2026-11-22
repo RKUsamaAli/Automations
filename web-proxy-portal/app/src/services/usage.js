@@ -15,6 +15,7 @@ const db = require('../db');
 const sessionsService = require('./sessions');
 const TtlCache = require('../lib/ttlCache');
 const tzlib = require('../lib/timezone');
+const { newId } = require('../lib/ids');
 
 const SLOT_MS = 15 * 60000;
 const slotOf = (ms) => Math.floor(ms / SLOT_MS) * SLOT_MS;
@@ -47,13 +48,14 @@ function flush() {
     pendingSessions = new Map();
     const conn = db.get();
     const upsert = conn.prepare(
-        `INSERT INTO usage_slots (user_id, slot, requests, bytes) VALUES (?, ?, ?, ?)
-         ON CONFLICT(user_id, slot) DO UPDATE SET requests = requests + excluded.requests, bytes = bytes + excluded.bytes`
+        `INSERT INTO usage_slots (id, user_id, slot, requests, bytes, created_at, created_by, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(user_id, slot) DO UPDATE SET requests = requests + excluded.requests, bytes = bytes + excluded.bytes, updated_at = excluded.updated_at`
     );
     const tx = conn.transaction(() => {
         for (const [key, v] of users) {
             const [userId, slot] = key.split('|');
-            upsert.run(Number(userId), Number(slot), v.requests, v.bytes);
+            const now = Date.now();
+            upsert.run(newId(now), userId, Number(slot), v.requests, v.bytes, now, userId, now, userId);
         }
         for (const [id, v] of sess) sessionsService.addUsage(id, v.requests, v.bytes, v.lastSeen);
     });
@@ -87,7 +89,7 @@ function bytesToday(userId, tz) {
     let pending = 0;
     for (const [key, v] of pendingUsers) {
         const [uid, slot] = key.split('|');
-        if (Number(uid) === userId && Number(slot) >= since) pending += v.bytes;
+        if (uid === String(userId) && Number(slot) >= since) pending += v.bytes;
     }
     return fromDb + pending;
 }

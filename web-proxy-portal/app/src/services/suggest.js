@@ -51,7 +51,7 @@ function hosts(q, { limit = LIMIT, days = 14 } = {}) {
         .get()
         .prepare(
             `SELECT host, COUNT(*) AS n FROM request_log
-             WHERE ts >= ? AND host IS NOT NULL AND host <> '' AND source = 'proxy' AND host LIKE ? ESCAPE '\\'
+             WHERE created_at >= ? AND host IS NOT NULL AND host <> '' AND source = 'proxy' AND host LIKE ? ESCAPE '\\'
              GROUP BY host ORDER BY (host LIKE ? ESCAPE '\\') DESC, n DESC LIMIT ?`
         )
         .all(Date.now() - days * 86400000, like(q), prefix(q), limit * 2);

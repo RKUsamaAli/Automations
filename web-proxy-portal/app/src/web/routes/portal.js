@@ -18,6 +18,8 @@
 const express = require('express');
 const config = require('../../config');
 const sites = require('../../services/sites');
+const { idOrNull } = require('../../lib/ids');
+const context = require('../../lib/context');
 const suggest = require('../../services/suggest');
 const sessions = require('../../services/sessions');
 const pools = require('../../services/pools');
@@ -30,6 +32,12 @@ const { mintTicket } = require('../../lib/authTokens');
 const { isPrivateHost } = require('../../lib/netGuard');
 
 const router = express.Router();
+
+/** Device of the current request (browser / OS / screen), passed to the proxy in the ticket. */
+const clientId = () => {
+    const c = context.get();
+    return c ? c.clientId : null;
+};
 
 /** Turns "example.com/path" into "https://example.com/path"; rejects non-http(s). */
 function normalizeUrl(input) {
@@ -86,7 +94,7 @@ router.get('/sessions', (req, res) => {
 router.post('/browse', (req, res) => {
     const { url, siteId, sessionId } = req.body || {};
     const user = req.user;
-    const poolId = req.body && req.body.poolId ? Number(req.body.poolId) : null;
+    const poolId = req.body ? idOrNull(req.body.poolId) : null;
     if (poolId && !pools.canUsePool(user, poolId)) {
         return res.status(403).json({ error: 'You are not allowed to use that proxy pool.' });
     }
@@ -97,14 +105,14 @@ router.post('/browse', (req, res) => {
         if (!s || s.user_id !== user.id || s.ended_at || s.end_requested) {
             return res.status(404).json({ error: 'That session has ended. Start a new one.' });
         }
-        const ticket = mintTicket({ uid: user.id, v: user.token_version, sid: s.id, url: url ? safeUrl(url) : null });
+        const ticket = mintTicket({ uid: user.id, v: user.token_version, sid: s.id, url: url ? safeUrl(url) : null, cid: clientId() });
         return res.json({ redirect: `${config.proxyBaseUrl}/__portal/start?t=${encodeURIComponent(ticket)}` });
     }
 
     let target;
     try {
         if (siteId) {
-            const site = sites.listEnabled().find((s) => s.id === Number(siteId));
+            const site = sites.listEnabled().find((s) => s.id === String(siteId));
             if (!site) return res.status(404).json({ error: 'Site not found' });
             target = site.start_url;
         } else {
@@ -124,7 +132,7 @@ router.post('/browse', (req, res) => {
         return res.status(429).json({ error: `You already have ${max} active sessions. End one before starting another.` });
     }
 
-    const ticket = mintTicket({ uid: user.id, v: user.token_version, url: target, pool: poolId });
+    const ticket = mintTicket({ uid: user.id, v: user.token_version, url: target, pool: poolId, cid: clientId() });
     res.json({ redirect: `${config.proxyBaseUrl}/__portal/start?t=${encodeURIComponent(ticket)}` });
 });
 
@@ -187,14 +195,14 @@ router.post('/proxies/check', requireUserProxies, async (req, res, next) => {
 });
 
 router.patch('/proxies/:id', requireUserProxies, (req, res) => {
-    const owned = pools.getOwnedProxy(req.user.id, Number(req.params.id));
+    const owned = pools.getOwnedProxy(req.user.id, String(req.params.id));
     if (!owned) return res.status(404).json({ error: 'Proxy not found' });
     pools.setProxyEnabled(owned.id, !!(req.body || {}).enabled);
     res.json({ ok: true });
 });
 
 router.delete('/proxies/:id', requireUserProxies, (req, res) => {
-    const owned = pools.getOwnedProxy(req.user.id, Number(req.params.id));
+    const owned = pools.getOwnedProxy(req.user.id, String(req.params.id));
     if (!owned) return res.status(404).json({ error: 'Proxy not found' });
     pools.deleteProxy(owned.id);
     res.json({ ok: true });

@@ -14,6 +14,9 @@
  */
 const crypto = require('crypto');
 const db = require('../db');
+const system = require('../lib/system');
+const context = require('../lib/context');
+const clientDevices = require('./clientDevices');
 const paging = require('../lib/paging');
 const config = require('../config');
 const events = require('./events');
@@ -69,12 +72,12 @@ function report(r) {
         const recent = conn
             .prepare(
                 `SELECT id, ref FROM error_reports
-                 WHERE fingerprint = ? AND IFNULL(user_id, 0) = ? AND IFNULL(session_id, '') = ? AND last_seen_at > ?
+                 WHERE fingerprint = ? AND IFNULL(created_by, '') = ? AND IFNULL(session_id, '') = ? AND last_seen_at > ?
                  ORDER BY id DESC LIMIT 1`
             )
-            .get(fingerprint, r.userId || 0, r.sessionId || '', now - DEDUPE_MS);
+            .get(fingerprint, r.userId || '', r.sessionId || '', now - DEDUPE_MS);
         if (recent) {
-            conn.prepare('UPDATE error_reports SET occurrences = occurrences + 1, last_seen_at = ? WHERE id = ?').run(now, recent.id);
+            conn.prepare('UPDATE error_reports SET occurrences = occurrences + 1, last_seen_at = ?, updated_at = ? WHERE id = ?').run(now, now, recent.id);
             return recent.ref;
         }
         if (!limiter.hit('reports', 60)) {
@@ -102,33 +105,37 @@ function report(r) {
             ...(r.breadcrumbs || [])
         ].sort((a, b) => a.t - b.t);
 
-        conn.prepare(
-            `INSERT INTO error_reports (ref, created_at, last_seen_at, source, kind, severity, fingerprint, message, stack,
-                user_id, session_id, request_id, release, url, dest_host, proxy_id, pool_id, client_ip, user_agent, context, breadcrumbs)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-        ).run(
+        const sys = system.info();
+        db.insert('error_reports', {
             ref,
-            now,
-            now,
-            r.source,
-            r.kind,
-            r.severity === 'warning' ? 'warning' : 'error',
+            last_seen_at: now,
+            source: r.source,
+            kind: r.kind,
+            severity: r.severity === 'warning' ? 'warning' : 'error',
             fingerprint,
             message,
             stack,
-            r.userId || null,
-            r.sessionId || null,
-            r.requestId || null,
-            config.releaseName,
-            r.url ? redactUrl(r.url) : null,
-            r.destHost || null,
-            r.proxyId || null,
-            r.poolId || null,
-            r.clientIp || null,
-            r.userAgent ? String(r.userAgent).slice(0, 300) : null,
-            JSON.stringify(redactObject(r.context || {})),
-            JSON.stringify(redactObject(trail.slice(-60)))
-        );
+            session_id: r.sessionId || null,
+            request_id: r.requestId || null,
+            release: config.releaseName,
+            url: r.url ? redactUrl(r.url) : null,
+            dest_host: r.destHost || null,
+            proxy_id: r.proxyId || null,
+            pool_id: r.poolId || null,
+            client_ip: r.clientIp || null,
+            user_agent: r.userAgent ? String(r.userAgent).slice(0, 300) : null,
+            client_id: r.clientId || (context.get() && context.get().clientId) || null,
+            server: sys.server,
+            process: sys.process,
+            system: JSON.stringify(system.snapshot()),
+            context: JSON.stringify(redactObject(r.context || {})),
+            breadcrumbs: JSON.stringify(redactObject(trail.slice(-60))),
+            // created_by = the user who hit the error (not an admin)
+            created_by: r.userId || null,
+            updated_by: r.userId || null,
+            created_at: now,
+            updated_at: now
+        });
         log.error(`${r.kind}: ${message}`, { ref, source: r.source, user: r.userId || null, session: r.sessionId ? r.sessionId.slice(0, 8) : null, requestId: r.requestId || null, dest: r.destHost || null });
         return ref;
     } catch (e) {
@@ -141,15 +148,23 @@ const parse = (row) =>
     row && {
         ...row,
         context: row.context ? JSON.parse(row.context) : {},
+        system: row.system ? JSON.parse(row.system) : {},
         breadcrumbs: row.breadcrumbs ? JSON.parse(row.breadcrumbs) : []
     };
 
 function get(refOrId) {
     const row = db
         .get()
-        .prepare(`SELECT e.*, u.username FROM error_reports e LEFT JOIN users u ON u.id = e.user_id WHERE e.ref = ? OR e.id = ?`)
-        .get(String(refOrId).toUpperCase(), Number(refOrId) || -1);
-    return parse(row) || null;
+        .prepare(
+            `SELECT e.*, e.created_by AS user_id, u.username, CASE WHEN e.resolved = 1 THEN e.updated_by END AS resolved_by, rb.username AS resolved_by_name
+             FROM error_reports e LEFT JOIN users u ON u.id = e.created_by LEFT JOIN users rb ON rb.id = e.updated_by
+             WHERE e.ref = ? OR e.id = ?`
+        )
+        .get(String(refOrId).toUpperCase(), String(refOrId));
+    if (!row) return null;
+    const out = parse(row);
+    out.client = row.client_id ? clientDevices.get(row.client_id) : null; // browser / OS / device / screen
+    return out;
 }
 
 /**
@@ -170,9 +185,9 @@ function errWhere({ status = 'open', q = '' } = {}) {
     return { where, args };
 }
 const ERR_COLS = `e.id, e.ref, e.created_at, e.last_seen_at, e.occurrences, e.source, e.kind, e.severity, e.fingerprint,
-    e.message, e.user_id, u.username, e.session_id, e.url, e.dest_host, e.resolved,
+    e.message, e.created_by AS user_id, u.username, e.session_id, e.url, e.dest_host, e.resolved,
     (SELECT COUNT(*) FROM error_reports g WHERE g.fingerprint = e.fingerprint) AS group_count`;
-const ERR_FROM = 'FROM error_reports e LEFT JOIN users u ON u.id = e.user_id';
+const ERR_FROM = 'FROM error_reports e LEFT JOIN users u ON u.id = e.created_by';
 const whereSql = (w) => (w.length ? 'WHERE ' + w.join(' AND ') : '');
 
 function list({ status = 'open', q = '', limit = 200 } = {}) {
@@ -188,7 +203,7 @@ function page(f = {}, { cursor = null, limit } = {}) {
     const after = paging.decodeCursor(cursor);
     if (after) {
         where.push('(e.last_seen_at < ? OR (e.last_seen_at = ? AND e.id < ?))');
-        args.push(Number(after[0]), Number(after[0]), Number(after[1]));
+        args.push(Number(after[0]), Number(after[0]), String(after[1]));
     }
     args.push(n + 1);
     const rows = db.get().prepare(`SELECT ${ERR_COLS} ${ERR_FROM} ${whereSql(where)} ORDER BY e.last_seen_at DESC, e.id DESC LIMIT ?`).all(...args);
@@ -203,7 +218,7 @@ function pageSummary(f = {}) {
         .prepare(
             `SELECT COUNT(*) AS total, SUM(CASE WHEN e.resolved = 0 THEN 1 ELSE 0 END) AS open,
                     SUM(CASE WHEN e.severity = 'error' THEN 1 ELSE 0 END) AS errors,
-                    SUM(e.occurrences) AS occurrences, COUNT(DISTINCT e.user_id) AS users,
+                    SUM(e.occurrences) AS occurrences, COUNT(DISTINCT e.created_by) AS users,
                     COUNT(DISTINCT e.fingerprint) AS problems
              ${ERR_FROM} ${whereSql(where)}`
         )
@@ -213,16 +228,16 @@ function pageSummary(f = {}) {
 
 function setResolved(id, resolved, byUserId, note) {
     db.get()
-        .prepare('UPDATE error_reports SET resolved = ?, resolved_at = ?, resolved_by = ?, note = COALESCE(?, note) WHERE id = ?')
-        .run(resolved ? 1 : 0, resolved ? Date.now() : null, resolved ? byUserId : null, note ?? null, id);
+        .prepare(`UPDATE error_reports SET resolved = ?, resolved_at = ?, note = COALESCE(?, note), updated_at = ?, updated_by = ? WHERE id = ?`)
+        .run(resolved ? 1 : 0, resolved ? Date.now() : null, note ?? null, Date.now(), byUserId || null, id);
 }
 
 /** Resolves every report with the same fingerprint ("fixed this bug"). */
 function resolveGroup(fingerprint, byUserId) {
     return db
         .get()
-        .prepare('UPDATE error_reports SET resolved = 1, resolved_at = ?, resolved_by = ? WHERE fingerprint = ? AND resolved = 0')
-        .run(Date.now(), byUserId, fingerprint).changes;
+        .prepare('UPDATE error_reports SET resolved = 1, resolved_at = ?, updated_at = ?, updated_by = ? WHERE fingerprint = ? AND resolved = 0')
+        .run(Date.now(), Date.now(), byUserId || null, fingerprint).changes;
 }
 
 function countOpen() {
@@ -233,7 +248,7 @@ function countOpen() {
 function exportRange(sinceMs) {
     return db
         .get()
-        .prepare(`SELECT e.*, u.username FROM error_reports e LEFT JOIN users u ON u.id = e.user_id WHERE e.created_at >= ? ORDER BY e.id`)
+        .prepare(`SELECT e.*, e.created_by AS user_id, u.username FROM error_reports e LEFT JOIN users u ON u.id = e.created_by WHERE e.created_at >= ? ORDER BY e.id`)
         .all(sinceMs)
         .map(parse);
 }

@@ -15,14 +15,21 @@ const TtlCache = require('../lib/ttlCache');
 // and the proxy must notice quickly. A primary-key lookup is microseconds.
 const cache = new TtlCache(2000);
 
-function create({ id, userId, poolId, proxyId, startUrl, clientIp, userAgent }) {
+function create({ id, userId, poolId, proxyId, startUrl, clientIp, userAgent, clientId = null }) {
     const now = Date.now();
-    db.get()
-        .prepare(
-            `INSERT INTO sessions (id, user_id, pool_id, proxy_id, start_url, client_ip, user_agent, created_at, last_seen_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-        )
-        .run(id, userId, poolId || null, proxyId || null, startUrl ? String(startUrl).slice(0, 2000) : null, clientIp || null, userAgent ? String(userAgent).slice(0, 300) : null, now, now);
+    db.insert('sessions', {
+        id, // Rammerhead session id (32 random hex chars)
+        user_id: userId,
+        pool_id: poolId || null,
+        proxy_id: proxyId || null,
+        start_url: startUrl ? String(startUrl).slice(0, 2000) : null,
+        client_ip: clientIp || null,
+        user_agent: userAgent ? String(userAgent).slice(0, 300) : null,
+        client_id: clientId,
+        last_seen_at: now,
+        created_by: userId,
+        updated_by: userId
+    });
     cache.delete(id);
 }
 
@@ -36,7 +43,7 @@ function getCached(id) {
 }
 
 function setProxy(id, proxyId) {
-    db.get().prepare('UPDATE sessions SET proxy_id = ? WHERE id = ?').run(proxyId || null, id);
+    db.get().prepare(`UPDATE sessions SET proxy_id = ?, ${db.TOUCH} WHERE id = ?`).run(proxyId || null, ...db.touch(), id);
     cache.delete(id);
 }
 
@@ -78,7 +85,7 @@ function pageActive({ cursor = null, limit, userId = null } = {}) {
     let extra = '';
     if (userId) {
         extra += ' AND s.user_id = ?';
-        args.push(Number(userId));
+        args.push(String(userId));
     }
     if (after) {
         extra += ' AND (s.last_seen_at < ? OR (s.last_seen_at = ? AND s.id < ?))';
@@ -108,7 +115,7 @@ function activeSummary({ userId = null } = {}) {
                     SUM(CASE WHEN end_requested = 1 THEN 1 ELSE 0 END) AS ending
              FROM sessions WHERE ended_at IS NULL ${userId ? 'AND user_id = ?' : ''}`
         )
-        .get(...(userId ? [Number(userId)] : []));
+        .get(...(userId ? [String(userId)] : []));
     return { total: r.total, users: r.users, requests: r.requests || 0, bytes: r.bytes || 0, ending: r.ending || 0 };
 }
 
@@ -124,17 +131,17 @@ function listRecent(limit = 100) {
 
 /** Portal asks for a session to end; the proxy process executes it (see jobs/sessionSync.js). */
 function requestEnd(id) {
-    db.get().prepare('UPDATE sessions SET end_requested = 1 WHERE id = ? AND ended_at IS NULL').run(id);
+    db.get().prepare(`UPDATE sessions SET end_requested = 1, ${db.TOUCH} WHERE id = ? AND ended_at IS NULL`).run(...db.touch(), id);
     cache.delete(id);
 }
 
 function requestEndForUser(userId) {
-    db.get().prepare('UPDATE sessions SET end_requested = 1 WHERE user_id = ? AND ended_at IS NULL').run(userId);
+    db.get().prepare(`UPDATE sessions SET end_requested = 1, ${db.TOUCH} WHERE user_id = ? AND ended_at IS NULL`).run(...db.touch(), userId);
     cache.clear();
 }
 
 function markEnded(id, reason) {
-    db.get().prepare('UPDATE sessions SET ended_at = ?, end_reason = ? WHERE id = ? AND ended_at IS NULL').run(Date.now(), reason, id);
+    db.get().prepare(`UPDATE sessions SET ended_at = ?, end_reason = ?, ${db.TOUCH} WHERE id = ? AND ended_at IS NULL`).run(Date.now(), reason, ...db.touch(), id);
     cache.delete(id);
 }
 
@@ -149,8 +156,8 @@ function listActiveIds() {
 /** Adds usage deltas collected in memory by the proxy engine. */
 function addUsage(id, requests, bytes, lastSeenAt) {
     db.get()
-        .prepare('UPDATE sessions SET requests = requests + ?, bytes = bytes + ?, last_seen_at = MAX(last_seen_at, ?) WHERE id = ?')
-        .run(requests, bytes, lastSeenAt, id);
+        .prepare('UPDATE sessions SET requests = requests + ?, bytes = bytes + ?, last_seen_at = MAX(last_seen_at, ?), updated_at = MAX(updated_at, ?) WHERE id = ?')
+        .run(requests, bytes, lastSeenAt, lastSeenAt, id);
 }
 
 /** Active sessions + sessions started since local midnight in `tz`. */

@@ -66,12 +66,8 @@ function get(key) {
 
 /** Updates known keys only; coerces each value to the default's type. */
 function update(patch) {
-    const stmt = db
-        .get()
-        .prepare(
-            'INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at'
-        );
-    const now = Date.now();
+    const conn = db.get();
+    const upd = conn.prepare(`UPDATE settings SET value = ?, ${db.TOUCH} WHERE key = ?`);
     const tx = db.get().transaction(() => {
         for (const [key, raw] of Object.entries(patch || {})) {
             if (!(key in DEFAULTS)) continue;
@@ -85,7 +81,8 @@ function update(patch) {
             if (ENUMS[key] && !ENUMS[key].includes(value)) {
                 throw new Error(`${key} must be one of: ${ENUMS[key].join(', ')}`);
             }
-            stmt.run(key, JSON.stringify(value), now);
+            // update the row if the key exists, otherwise create it (with id + audit columns)
+            if (!upd.run(JSON.stringify(value), ...db.touch(), key).changes) db.insert('settings', { key, value: JSON.stringify(value) });
         }
     });
     tx();

@@ -9,7 +9,7 @@
 
     function selectedPool() {
         var v = P.$('#pool').value;
-        return v ? Number(v) : null;
+        return v || null;
     }
     function hostOf(url) {
         try { return new URL(url).hostname; } catch (_) { return url || '-'; }
@@ -93,7 +93,7 @@
                 chevron + '</button></li>';
         }).join('');
         P.$all('[data-site]', box).forEach(function (btn) {
-            btn.addEventListener('click', function () { browse({ siteId: Number(btn.getAttribute('data-site')) }, btn); });
+            btn.addEventListener('click', function () { browse({ siteId: btn.getAttribute('data-site') }, btn); });
         });
     }
 

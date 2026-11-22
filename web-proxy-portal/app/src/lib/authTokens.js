@@ -46,9 +46,9 @@ const readProxy = (token) => verify(token, config.appSecret, 'proxy');
  * @param {string} [p.sid]   existing session to resume
  * @param {number} [p.pool]  proxy pool the user picked (validated by the portal)
  */
-function mintTicket({ uid, v, url = null, sid = null, pool = null }) {
+function mintTicket({ uid, v, url = null, sid = null, pool = null, cid = null }) {
     return sign(
-        { uid, v, url, sid, pool, n: crypto.randomBytes(12).toString('base64url'), exp: Date.now() + TICKET_TTL_MS },
+        { uid, v, url, sid, pool, cid, n: crypto.randomBytes(12).toString('base64url'), exp: Date.now() + TICKET_TTL_MS },
         config.appSecret,
         'ticket'
     );

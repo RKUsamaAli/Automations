@@ -19,6 +19,7 @@
  */
 const config = require('../config');
 const users = require('../services/users');
+const context = require('../lib/context');
 const sessions = require('../services/sessions');
 const settings = require('../services/settings');
 const sites = require('../services/sites');
@@ -174,6 +175,8 @@ function createGuard({ rh, sessionStore }) {
             return deny(req, res, isWebsocket, 401, 'Not logged in');
         }
         req.portalUser = user;
+        // Who is acting, for created_by/updated_by and the activity log of anything this request writes.
+        context.enter({ userId: user.id, requestId: req.portalRequestId, ip, source: 'proxy' });
 
         // Hammerhead/Rammerhead service routes (task.js, messaging, ...) only need a logged-in user.
         if (isRoute) return false;

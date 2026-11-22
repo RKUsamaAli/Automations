@@ -13,6 +13,9 @@
 const db = require('../db');
 const { redactUrl } = require('../lib/redact');
 const paging = require('../lib/paging');
+const { newId } = require('../lib/ids');
+const system = require('../lib/system');
+const sessions = require('./sessions');
 const log = require('../lib/logger')('request-log');
 
 const LEVEL = () => (process.env.REQUEST_LOG_LEVEL || 'pages').toLowerCase();
@@ -36,11 +39,12 @@ function wanted(kind, status) {
 function add(r) {
     if (!wanted(r.kind, r.status)) return;
     if (buffer.length >= MAX_BUFFER) buffer.shift(); // never grow without bound if the DB is stuck
+    // Column order matches flush(): created_at, created_by (= the user who made the request), ...
     buffer.push([
         Date.now(),
+        r.userId || null,
         r.source,
         r.kind,
-        r.userId || null,
         r.sessionId || null,
         r.method || null,
         r.url ? redactUrl(r.url) : null,
@@ -50,7 +54,9 @@ function add(r) {
         r.bytes == null ? null : r.bytes,
         r.proxyId || null,
         r.requestId || null,
-        r.error ? String(r.error).slice(0, 300) : null
+        r.error ? String(r.error).slice(0, 300) : null,
+        r.ip || null,
+        r.clientId || null
     ]);
     if (!timer) {
         timer = setTimeout(flush, 2000);
@@ -66,11 +72,20 @@ function flush() {
     try {
         const conn = db.get();
         const stmt = conn.prepare(
-            `INSERT INTO request_log (ts, source, kind, user_id, session_id, method, url, host, status, ms, bytes, proxy_id, request_id, error)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            `INSERT INTO request_log (id, created_at, created_by, updated_at, updated_by, source, kind, session_id, method, url, host, status, ms, bytes, proxy_id, request_id, error, ip, client_id, server, process)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         );
+        const { server, process: proc } = system.info();
         conn.transaction(() => {
-            for (const r of rows) stmt.run(...r);
+            for (const r of rows) {
+                // Proxied requests: the device is the one that started the browsing session.
+                if (!r[15] && r[4]) {
+                    const s = sessions.getCached(r[4]);
+                    r[15] = s ? s.client_id : null;
+                }
+                // id = GUID v7 from the time the request happened, so ORDER BY id = time order
+                stmt.run(newId(r[0]), r[0], r[1], r[0], r[1], ...r.slice(2), server, proc);
+            }
         })();
     } catch (e) {
         log.error(`could not write ${rows.length} request log rows`, e);
@@ -88,7 +103,7 @@ function whereFor(f = {}) {
         where.push(sql);
         if (value !== undefined) args.push(value);
     };
-    if (f.userId) filter('r.user_id = ?', Number(f.userId));
+    if (f.userId) filter('r.created_by = ?', String(f.userId));
     if (f.sessionId) filter('r.session_id = ?', String(f.sessionId));
     // 'activity' = what a person did: proxied pages, portal page views, portal
     // actions that change something (not background GETs), and every failure.
@@ -102,18 +117,18 @@ function whereFor(f = {}) {
         where.push('(r.url LIKE ? OR r.host LIKE ? OR r.request_id = ? OR u.username LIKE ?)');
         args.push(like, like, String(f.q), like);
     }
-    if (f.since) filter('r.ts >= ?', Number(f.since));
+    if (f.since) filter('r.created_at >= ?', Number(f.since));
     return { where, args };
 }
 
-const FROM = 'FROM request_log r LEFT JOIN users u ON u.id = r.user_id';
+const FROM = 'FROM request_log r LEFT JOIN users u ON u.id = r.created_by';
 const whereSql = (where) => (where.length ? 'WHERE ' + where.join(' AND ') : '');
 
 /** Filtered list for Admin -> Requests (CSV export, tests). Newest first. */
 function list(f = {}) {
     const { where, args } = whereFor(f);
     args.push(Math.min(Number(f.limit) || 200, 2000));
-    return db.get().prepare(`SELECT r.*, u.username ${FROM} ${whereSql(where)} ORDER BY r.id DESC LIMIT ?`).all(...args);
+    return db.get().prepare(`SELECT r.*, r.created_at AS ts, r.created_by AS user_id, u.username ${FROM} ${whereSql(where)} ORDER BY r.id DESC LIMIT ?`).all(...args);
 }
 
 /**
@@ -126,10 +141,10 @@ function page(f = {}, { cursor = null, limit } = {}) {
     const after = paging.decodeCursor(cursor);
     if (after) {
         where.push('r.id < ?');
-        args.push(Number(after[0]));
+        args.push(String(after[0]));
     }
     args.push(n + 1);
-    const rows = db.get().prepare(`SELECT r.*, u.username ${FROM} ${whereSql(where)} ORDER BY r.id DESC LIMIT ?`).all(...args);
+    const rows = db.get().prepare(`SELECT r.*, r.created_at AS ts, r.created_by AS user_id, u.username ${FROM} ${whereSql(where)} ORDER BY r.id DESC LIMIT ?`).all(...args);
     return paging.toPage(rows, n, (r) => [r.id]);
 }
 
@@ -143,7 +158,7 @@ function pageSummary(f = {}) {
                     SUM(CASE WHEN r.status = 0 OR r.status >= 400 THEN 1 ELSE 0 END) AS failed,
                     CAST(AVG(r.ms) AS INTEGER) AS avg_ms,
                     SUM(COALESCE(r.bytes, 0)) AS bytes,
-                    COUNT(DISTINCT r.user_id) AS users,
+                    COUNT(DISTINCT r.created_by) AS users,
                     COUNT(DISTINCT r.session_id) AS sessions
              ${FROM} ${whereSql(where)}`
         )
@@ -161,7 +176,7 @@ function pageSummary(f = {}) {
 
 /** Everything one browsing session did, oldest first. */
 function sessionTimeline(sessionId, limit = 500) {
-    return db.get().prepare('SELECT * FROM request_log WHERE session_id = ? ORDER BY id DESC LIMIT ?').all(sessionId, limit).reverse();
+    return db.get().prepare('SELECT *, created_at AS ts, created_by AS user_id FROM request_log WHERE session_id = ? ORDER BY id DESC LIMIT ?').all(sessionId, limit).reverse();
 }
 
 /** Lazy-loaded session timeline: newest first (the drawer shows the latest activity on top). */
@@ -169,8 +184,8 @@ function sessionTimelinePage(sessionId, { cursor = null, limit } = {}) {
     const n = paging.limitOf(limit);
     const after = paging.decodeCursor(cursor);
     const rows = after
-        ? db.get().prepare('SELECT * FROM request_log WHERE session_id = ? AND id < ? ORDER BY id DESC LIMIT ?').all(sessionId, Number(after[0]), n + 1)
-        : db.get().prepare('SELECT * FROM request_log WHERE session_id = ? ORDER BY id DESC LIMIT ?').all(sessionId, n + 1);
+        ? db.get().prepare('SELECT *, created_at AS ts, created_by AS user_id FROM request_log WHERE session_id = ? AND id < ? ORDER BY id DESC LIMIT ?').all(sessionId, String(after[0]), n + 1)
+        : db.get().prepare('SELECT *, created_at AS ts, created_by AS user_id FROM request_log WHERE session_id = ? ORDER BY id DESC LIMIT ?').all(sessionId, n + 1);
     return paging.toPage(rows, n, (r) => [r.id]);
 }
 
@@ -181,7 +196,7 @@ function sessionTimelineSummary(sessionId) {
         .prepare(
             `SELECT COUNT(*) AS total, SUM(CASE WHEN kind = 'page' THEN 1 ELSE 0 END) AS pages,
                     SUM(CASE WHEN status = 0 OR status >= 400 THEN 1 ELSE 0 END) AS failed,
-                    SUM(COALESCE(bytes, 0)) AS bytes, MIN(ts) AS first_ts, MAX(ts) AS last_ts
+                    SUM(COALESCE(bytes, 0)) AS bytes, MIN(created_at) AS first_ts, MAX(created_at) AS last_ts
              FROM request_log WHERE session_id = ?`
         )
         .get(sessionId);
@@ -190,7 +205,7 @@ function sessionTimelineSummary(sessionId) {
 
 /** Recent rows for a user (used to enrich error reports). */
 function recentForUser(userId, limit = 20) {
-    return db.get().prepare('SELECT * FROM request_log WHERE user_id = ? ORDER BY id DESC LIMIT ?').all(userId, limit).reverse();
+    return db.get().prepare('SELECT *, created_at AS ts, created_by AS user_id FROM request_log WHERE created_by = ? ORDER BY id DESC LIMIT ?').all(userId, limit).reverse();
 }
 
 /** Requests / failures / median+p95 per 10 minutes over the last `hours`. */
@@ -199,16 +214,16 @@ function summary(hours = 24) {
     return db
         .get()
         .prepare(
-            `SELECT (ts / 600000) * 600000 AS bucket, COUNT(*) AS requests,
+            `SELECT (created_at / 600000) * 600000 AS bucket, COUNT(*) AS requests,
                     SUM(CASE WHEN status = 0 OR status >= 500 THEN 1 ELSE 0 END) AS failures,
                     CAST(AVG(ms) AS INTEGER) AS avg_ms
-             FROM request_log WHERE ts >= ? AND kind IN ('page','api') GROUP BY bucket ORDER BY bucket`
+             FROM request_log WHERE created_at >= ? AND kind IN ('page','api') GROUP BY bucket ORDER BY bucket`
         )
         .all(since);
 }
 
 function prune(days = 14) {
-    return db.get().prepare('DELETE FROM request_log WHERE ts < ?').run(Date.now() - days * 86400000).changes;
+    return db.get().prepare('DELETE FROM request_log WHERE created_at < ?').run(Date.now() - days * 86400000).changes;
 }
 
 module.exports = { add, flush, list, page, pageSummary, sessionTimeline, sessionTimelinePage, sessionTimelineSummary, recentForUser, summary, prune, wanted };

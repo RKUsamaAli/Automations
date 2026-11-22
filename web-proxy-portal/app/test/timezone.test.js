@@ -39,7 +39,7 @@ test('timezone helpers: offsets, local midnight, DST, odd offsets', () => {
 test('usage: "today" and per-day totals follow the viewer\'s midnight', () => {
     const { user } = users.create({ username: 'tzuser', password: 'password123' });
     const conn = db.get();
-    const add = (ms, bytes) => conn.prepare('INSERT INTO usage_slots (user_id, slot, requests, bytes) VALUES (?, ?, 1, ?)').run(user.id, Math.floor(ms / 900000) * 900000, bytes);
+    const add = (ms, bytes) => db.insert('usage_slots', { user_id: user.id, slot: Math.floor(ms / 900000) * 900000, requests: 1, bytes });
     const karachiMidnight = tz.startOfDay('Asia/Karachi');
     add(karachiMidnight + 60000, 1000); // just after Karachi midnight
     add(karachiMidnight - 60000, 500); // just before -> yesterday in Karachi

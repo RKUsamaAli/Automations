@@ -21,7 +21,7 @@ function run() {
     const errorRows = errorReports.prune(Number(process.env.ERROR_RETENTION_DAYS) || 30);
     const requestRows = requestLog.prune(Number(process.env.REQUEST_LOG_RETENTION_DAYS) || 14);
     const metricRows = metrics.prune(Number(process.env.METRICS_RETENTION_DAYS) || 30);
-    const checkRows = db.get().prepare('DELETE FROM proxy_checks WHERE ts < ?').run(Date.now() - 30 * 86400000).changes;
+    const checkRows = db.get().prepare('DELETE FROM proxy_checks WHERE created_at < ?').run(Date.now() - 30 * 86400000).changes;
     const usageRows = usage.prune(180);
     if (ticketRows + eventRows + sessionRows + usageRows + errorRows + requestRows + metricRows + checkRows) {
         log.info('pruned old rows', { tickets: ticketRows, events: eventRows, sessions: sessionRows, usage: usageRows, errorReports: errorRows, requests: requestRows, metrics: metricRows, proxyChecks: checkRows });

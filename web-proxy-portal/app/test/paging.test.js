@@ -71,7 +71,8 @@ test('request log: batches cover the filtered set exactly once; summary is the w
     requestLog.add({ source: 'proxy', kind: 'page', userId: user.id, sessionId: 'sess-page', method: 'GET', url: 'https://shop.example/new', host: 'shop.example', status: 200, ms: 1 });
     requestLog.flush();
     const second = requestLog.page(f, { cursor: first.nextCursor, limit: 50 });
-    assert.equal(second.items[0].id, first.items[49].id - 1, 'continues right after the last row seen');
+    const ordered = requestLog.list({ ...f, limit: 2000 }).filter((r) => r.url !== 'https://shop.example/new');
+    assert.equal(second.items[0].id, ordered[50].id, 'continues right after the last row seen');
 
     // Filters apply to both the batches and the summary.
     assert.equal(requestLog.pageSummary({ ...f, status: 'failed' }).total, 14);
@@ -92,12 +93,10 @@ test('events, errors, users, proxies, sessions: paged without gaps', () => {
 
     // Error reports share last_seen_at values -> the (last_seen_at, id) cursor must not skip ties.
     const conn = db.get();
-    const ins = conn.prepare(
-        `INSERT INTO error_reports (ref, created_at, last_seen_at, occurrences, source, kind, severity, fingerprint, message)
-         VALUES (?, ?, ?, 1, 'proxy', 'site_error', ?, ?, 'boom')`
-    );
     const t = Date.now();
-    for (let i = 0; i < 64; i++) ins.run('E-PG' + String(i).padStart(4, '0'), t, t - (i % 4) * 1000, i % 3 ? 'error' : 'warning', 'fp-' + (i % 8));
+    for (let i = 0; i < 64; i++) {
+        db.insert('error_reports', { ref: 'E-PG' + String(i).padStart(4, '0'), last_seen_at: t - (i % 4) * 1000, source: 'proxy', kind: 'site_error', severity: i % 3 ? 'error' : 'warning', fingerprint: 'fp-' + (i % 8), message: 'boom' });
+    }
     const er = walk((o) => errorReports.page({ status: 'all', q: 'E-PG' }, o), 10);
     assert.equal(er.all.length, 64);
     assert.ok(unique(er.all, (r) => r.id), 'ties on last_seen_at are not repeated');

@@ -14,6 +14,7 @@
 const config = require('../config');
 const db = require('../db');
 const users = require('../services/users');
+const clientDevices = require('../services/clientDevices');
 const sessions = require('../services/sessions');
 const sites = require('../services/sites');
 const settings = require('../services/settings');
@@ -40,7 +41,7 @@ const backToPortal = (title, message) =>
 /** Marks a ticket nonce as used. Returns false if it was already used (replay). */
 function consumeNonce(nonce) {
     try {
-        db.get().prepare('INSERT INTO used_tickets (nonce, expires_at) VALUES (?, ?)').run(nonce, Date.now() + TICKET_TTL_MS);
+        db.insert('used_tickets', { nonce, expires_at: Date.now() + TICKET_TTL_MS });
         return true;
     } catch (_) {
         return false;
@@ -102,7 +103,8 @@ function setupRoutes({ proxyServer, sessionStore, rh }) {
                 proxyId: choice.proxy ? choice.proxy.id : null,
                 startUrl: target,
                 clientIp: ip,
-                userAgent: req.headers['user-agent']
+                userAgent: req.headers['user-agent'],
+                clientId: ticket.cid || clientDevices.fromRequest(req)
             });
             events.record('session_start', {
                 userId: user.id,

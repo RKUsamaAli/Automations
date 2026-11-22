@@ -27,6 +27,13 @@ const { loadUser, requireUser, requireAdmin } = require('./middleware/auth');
 const { requestId, recordTrail, errorHandler } = require('./middleware/observability');
 const metrics = require('../services/metrics');
 const requestLog = require('../services/requestLog');
+const clientDevices = require('../services/clientDevices');
+const events = require('../services/events');
+const context = require('../lib/context');
+const system = require('../lib/system');
+
+system.setProcessName(`web:${process.env.NODE_APP_INSTANCE || 0}`);
+events.setSource('web');
 
 config.validate();
 db.open();
@@ -51,15 +58,19 @@ app.get('/healthz', (_req, res) => {
 
 app.use(requestId);
 app.use(securityHeaders);
+// Static assets (css/js) first: they need no cookies, user or database work.
+app.use('/assets', express.static(PUBLIC, { index: false, maxAge: config.isProduction ? '1h' : 0 }));
 app.use(express.json({ limit: '1mb' }));
 app.use(cookies);
 app.use(csrf);
 app.use(loadUser);
 app.use(timezone);
+// Request context: who is acting + request id + device, read by services to
+// fill created_by/updated_by and by the activity log. Lives for the whole request.
+app.use((req, res, next) => {
+    context.run({ userId: req.user ? req.user.id : null, requestId: req.id, ip: req.ip, source: 'web', clientId: clientDevices.fromRequest(req) }, next);
+});
 app.use(recordTrail);
-
-// Static assets (css/js). HTML pages are served by explicit routes below.
-app.use('/assets', express.static(PUBLIC, { index: false, maxAge: config.isProduction ? '1h' : 0 }));
 
 // ---- API ----
 app.use('/api/auth', require('./routes/auth'));

@@ -33,19 +33,24 @@ const config = require('../../config');
 const errorReports = require('../../services/errorReports');
 const suggest = require('../../services/suggest');
 const tzlib = require('../../lib/timezone');
+const { isId, idOrNull } = require('../../lib/ids');
 const requestLog = require('../../services/requestLog');
 const metrics = require('../../services/metrics');
 const { isBug } = require('../../lib/errors');
 
 const router = express.Router();
-const id = (req) => Number(req.params.id);
+/** Route :id as a GUID; anything else is a 404 ("not found"), never a DB error. */
+const id = (req) => {
+    if (!isId(req.params.id)) throw Object.assign(new Error('Not found'), { status: 404 });
+    return req.params.id;
+};
 
 /**
  * Wraps handlers: validation errors -> 400 with the message; real bugs
  * (see lib/errors.js) -> the error handler (500 + error report + reference).
  */
 const h = (fn) => (req, res, next) => {
-    const fail = (e) => (isBug(e) ? next(e) : res.status(400).json({ error: e.message }));
+    const fail = (e) => (isBug(e) ? next(e) : res.status(e.status || 400).json({ error: e.message }));
     try {
         const out = fn(req, res);
         if (out && typeof out.then === 'function') {
@@ -101,7 +106,7 @@ router.get(
             case 'domains':
                 return suggest.domainPatterns(q);
             case 'proxyHosts':
-                return suggest.proxyHosts(Number(req.query.pool), q);
+                return suggest.proxyHosts(idOrNull(req.query.pool), q);
             case 'errors':
                 // reference numbers first, then sites with errors, then users
                 return { refs: suggest.errorRefs(q), hosts: suggest.hosts(q, { limit: 4 }), users: suggest.users(q, { limit: 4 }) };
@@ -257,7 +262,7 @@ const siteInput = (b) => ({
     name: b.name,
     startUrl: b.startUrl,
     domains: b.domains,
-    poolId: b.poolId ? Number(b.poolId) : null,
+    poolId: idOrNull(b.poolId),
     enabled: b.enabled !== false,
     showOnLanding: b.showOnLanding !== false,
     sortOrder: b.sortOrder
@@ -311,7 +316,7 @@ router.get(
     '/sessions',
     h((req) => {
         if (!isPaged(req)) return sessions.listActive();
-        const userId = Number(req.query.user) || null;
+        const userId = idOrNull(req.query.user);
         return paged(req, (o) => sessions.pageActive({ ...o, userId }), () => sessions.activeSummary({ userId }));
     })
 );
@@ -326,7 +331,7 @@ router.get('/usage', h((req) => ({ timezone: req.tz, users: usage.summary(Number
 router.get(
     '/events',
     h((req) => {
-        const f = { type: req.query.type || null, userId: Number(req.query.userId) || null };
+        const f = { type: req.query.type || null, userId: idOrNull(req.query.userId) };
         if (!isPaged(req)) return events.list({ ...f, limit: req.query.limit });
         return paged(req, (o) => events.page(f, o), () => events.pageSummary(f));
     })

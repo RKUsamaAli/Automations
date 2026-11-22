@@ -47,7 +47,8 @@ function recordRequest({ sid, req, res, parsed, navigation, startedAt, userId, p
         bytes,
         proxyId,
         requestId: req.portalRequestId,
-        error: aborted ? 'connection closed before the response finished' : null
+        error: aborted ? 'connection closed before the response finished' : null,
+        ip: req.portalClientIp
     });
     if (!navigation && !failed) return; // successful resources: nothing to keep
     const crumb = {

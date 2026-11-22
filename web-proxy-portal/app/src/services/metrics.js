@@ -19,6 +19,7 @@ const os = require('os');
 const { monitorEventLoopDelay } = require('perf_hooks');
 const db = require('../db');
 const config = require('../config');
+const system = require('../lib/system');
 const events = require('./events');
 const log = require('../lib/logger')('metrics');
 
@@ -79,12 +80,8 @@ function sample() {
         active_sessions: activeSessions
     };
     try {
-        db.get()
-            .prepare(
-                `INSERT INTO server_metrics (ts, process, pid, release, uptime_s, rss_mb, heap_mb, cpu_pct, load1, free_mem_mb, loop_lag_ms, requests, errors, p95_ms, active_sessions)
-                 VALUES (@ts, @process, @pid, @release, @uptime_s, @rss_mb, @heap_mb, @cpu_pct, @load1, @free_mem_mb, @loop_lag_ms, @requests, @errors, @p95_ms, @active_sessions)`
-            )
-            .run(row);
+        const { ts, ...fields } = row;
+        db.insert('server_metrics', { ...fields, created_at: ts, updated_at: ts, created_by: null, updated_by: null });
     } catch (e) {
         log.warn('could not store metrics', e);
     }
@@ -103,6 +100,7 @@ function sample() {
  */
 function start(processName) {
     name = processName;
+    system.setProcessName(processName);
     try {
         loop = monitorEventLoopDelay({ resolution: 20 });
         loop.enable();
@@ -127,7 +125,7 @@ function start(processName) {
         };
         if (last && last.type === 'process_start' && lastPid && lastPid !== process.pid && !stillRunning(lastPid)) {
             const prev = conn
-                .prepare('SELECT rss_mb, loop_lag_ms, free_mem_mb, ts FROM server_metrics WHERE process = ? ORDER BY id DESC LIMIT 1')
+                .prepare('SELECT rss_mb, loop_lag_ms, free_mem_mb, created_at AS ts FROM server_metrics WHERE process = ? ORDER BY id DESC LIMIT 1')
                 .get(processName);
             events.record('process_unclean_exit', {
                 detail: `${processName}: previous instance stopped without a clean shutdown (crash, out-of-memory kill or power loss)` +
@@ -162,12 +160,12 @@ function series(hours = 24) {
     const since = Date.now() - hours * 3600000;
     return db
         .get()
-        .prepare('SELECT ts, process, pid, release, rss_mb, heap_mb, cpu_pct, load1, free_mem_mb, loop_lag_ms, requests, errors, p95_ms, active_sessions, uptime_s FROM server_metrics WHERE ts >= ? ORDER BY ts')
+        .prepare('SELECT created_at AS ts, process, pid, release, rss_mb, heap_mb, cpu_pct, load1, free_mem_mb, loop_lag_ms, requests, errors, p95_ms, active_sessions, uptime_s FROM server_metrics WHERE created_at >= ? ORDER BY created_at')
         .all(since);
 }
 
 function prune(days = 30) {
-    return db.get().prepare('DELETE FROM server_metrics WHERE ts < ?').run(Date.now() - days * 86400000).changes;
+    return db.get().prepare('DELETE FROM server_metrics WHERE created_at < ?').run(Date.now() - days * 86400000).changes;
 }
 
 module.exports = { start, stop, observe, sample, series, prune };

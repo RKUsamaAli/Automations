@@ -5,6 +5,7 @@
  * Sites also feed the domain allowlist (when enabled).
  */
 const db = require('../db');
+const { idOrNull } = require('../lib/ids');
 const TtlCache = require('../lib/ttlCache');
 const settings = require('./settings');
 const { parsePatterns, isValidPattern, matchesAny, hostOf } = require('../lib/domainMatch');
@@ -37,15 +38,18 @@ function save({ id, name, startUrl, domains, poolId = null, enabled = true, show
     let siteId = id;
     if (id) {
         conn.prepare(
-            'UPDATE sites SET name = ?, start_url = ?, domains = ?, pool_id = ?, enabled = ?, show_on_landing = ?, sort_order = ? WHERE id = ?'
-        ).run(name, startUrl, normalized, poolId || null, enabled ? 1 : 0, showOnLanding ? 1 : 0, Number(sortOrder) || 0, id);
+            `UPDATE sites SET name = ?, start_url = ?, domains = ?, pool_id = ?, enabled = ?, show_on_landing = ?, sort_order = ?, ${db.TOUCH} WHERE id = ?`
+        ).run(name, startUrl, normalized, idOrNull(poolId), enabled ? 1 : 0, showOnLanding ? 1 : 0, Number(sortOrder) || 0, ...db.touch(), id);
     } else {
-        siteId = conn
-            .prepare(
-                'INSERT INTO sites (name, start_url, domains, pool_id, enabled, show_on_landing, sort_order, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-            )
-            .run(name, startUrl, normalized, poolId || null, enabled ? 1 : 0, showOnLanding ? 1 : 0, Number(sortOrder) || 0, Date.now())
-            .lastInsertRowid;
+        siteId = db.insert('sites', {
+            name,
+            start_url: startUrl,
+            domains: normalized,
+            pool_id: idOrNull(poolId),
+            enabled: enabled ? 1 : 0,
+            show_on_landing: showOnLanding ? 1 : 0,
+            sort_order: Number(sortOrder) || 0
+        });
     }
     cache.clear();
     return conn.prepare('SELECT * FROM sites WHERE id = ?').get(siteId);

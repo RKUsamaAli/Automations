@@ -121,6 +121,7 @@ flushTimer.unref();
 
 // ------------------------------------------------------------- metrics ----
 // "proxy" = single process or cluster primary, "proxy:<n>" = cluster worker.
+require('../services/events').setSource('proxy');
 metrics.start(isPrimary ? 'proxy' : `proxy:${cluster.worker.id}`);
 
 // ---------------------------------------------------------------- jobs ----

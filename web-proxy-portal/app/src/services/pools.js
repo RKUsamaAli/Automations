@@ -21,6 +21,7 @@
  */
 const db = require('../db');
 const paging = require('../lib/paging');
+const { isId } = require('../lib/ids');
 const TtlCache = require('../lib/ttlCache');
 const { parseProxyList } = require('../lib/proxyString');
 const { assertPublicHost } = require('../lib/netGuard');
@@ -80,11 +81,11 @@ function getPoolAccess(poolId) {
 /** Replaces the list of users an admin pool is assigned to. */
 function setPoolAccess(poolId, userIds) {
     const conn = db.get();
-    const ids = [...new Set((userIds || []).map(Number).filter(Boolean))];
+    const ids = [...new Set((userIds || []).filter(isId))];
     conn.transaction(() => {
         conn.prepare('DELETE FROM pool_access WHERE pool_id = ?').run(poolId);
-        const ins = conn.prepare('INSERT INTO pool_access (pool_id, user_id, created_at) VALUES (?, ?, ?)');
-        for (const id of ids) ins.run(poolId, id, Date.now());
+        for (const userId of ids) db.insert('pool_access', { pool_id: poolId, user_id: userId });
+        conn.prepare(`UPDATE proxy_pools SET ${db.TOUCH} WHERE id = ?`).run(...db.touch(), poolId);
     })();
     cache.clear();
     return getPoolAccess(poolId);
@@ -95,9 +96,14 @@ function getOrCreatePersonalPool(user) {
     const conn = db.get();
     const existing = conn.prepare('SELECT * FROM proxy_pools WHERE owner_user_id = ? ORDER BY id LIMIT 1').get(user.id);
     if (existing) return existing;
-    const id = conn
-        .prepare("INSERT INTO proxy_pools (name, type, is_default, owner_user_id, visibility, description, created_at) VALUES (?, 'other', 0, ?, 'assigned', ?, ?)")
-        .run(`${user.username} - personal`, user.id, 'Proxies added by the user', Date.now()).lastInsertRowid;
+    const id = db.insert('proxy_pools', {
+        name: `${user.username} - personal`,
+        type: 'other',
+        is_default: 0,
+        owner_user_id: user.id,
+        visibility: 'assigned',
+        description: 'Proxies added by the user'
+    });
     cache.clear();
     return getPool(id);
 }
@@ -168,24 +174,23 @@ function savePool({ id, name, country = null, type = 'datacenter', isDefault = f
     if (!['all', 'assigned'].includes(visibility)) throw new Error('Visibility must be "all" or "assigned"');
     const conn = db.get();
     const tx = conn.transaction(() => {
-        if (isDefault) conn.prepare('UPDATE proxy_pools SET is_default = 0').run();
+        if (isDefault) conn.prepare(`UPDATE proxy_pools SET is_default = 0, ${db.TOUCH} WHERE is_default = 1`).run(...db.touch());
         if (id) {
-            conn.prepare('UPDATE proxy_pools SET name = ?, country = ?, type = ?, is_default = ?, description = ?, visibility = ? WHERE id = ? AND owner_user_id IS NULL').run(
+            conn.prepare(`UPDATE proxy_pools SET name = ?, country = ?, type = ?, is_default = ?, description = ?, visibility = ?, ${db.TOUCH} WHERE id = ? AND owner_user_id IS NULL`).run(
                 name,
                 country || null,
                 type,
                 isDefault ? 1 : 0,
                 description || null,
                 visibility,
+                ...db.touch(),
                 id
             );
             return id;
         }
         // The very first admin pool automatically becomes the default.
         const first = conn.prepare('SELECT COUNT(*) AS n FROM proxy_pools WHERE owner_user_id IS NULL').get().n === 0;
-        return conn
-            .prepare('INSERT INTO proxy_pools (name, country, type, is_default, description, visibility, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-            .run(name, country || null, type, isDefault || first ? 1 : 0, description || null, visibility, Date.now()).lastInsertRowid;
+        return db.insert('proxy_pools', { name, country: country || null, type, is_default: isDefault || first ? 1 : 0, description: description || null, visibility });
     });
     try {
         const poolId = tx();
@@ -204,7 +209,7 @@ function deletePool(id) {
 
 // -------------------------------------------------------------- proxies ----
 const PROXY_PUBLIC = `id, pool_id, protocol, host, port, username, (password IS NOT NULL) AS has_password,
-    enabled, status, latency_ms, fail_count, last_checked_at, last_error, created_at`;
+    enabled, status, latency_ms, fail_count, last_checked_at, last_error, created_at, created_by, updated_at, updated_by`;
 
 function listProxies(poolId) {
     return db
@@ -234,7 +239,7 @@ function pageProxies(poolId, { status = '', q = '' } = {}, { cursor = null, limi
     const after = paging.decodeCursor(cursor);
     if (after) {
         where.push('id > ?');
-        args.push(Number(after[0]));
+        args.push(String(after[0]));
     }
     args.push(n + 1);
     const rows = db
@@ -283,16 +288,10 @@ function getProxyWithSecrets(id) {
 function importProxies(poolId, text, defaultProtocol = 'http') {
     if (!getPool(poolId)) throw new Error('Pool not found');
     const { proxies, errors } = parseProxyList(text, defaultProtocol);
-    const stmt = db
-        .get()
-        .prepare(
-            `INSERT OR IGNORE INTO proxies (pool_id, protocol, host, port, username, password, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?)`
-        );
     let added = 0;
     const tx = db.get().transaction(() => {
         for (const p of proxies) {
-            added += stmt.run(poolId, p.protocol, p.host, p.port, p.username, p.password, Date.now()).changes;
+            if (db.insert('proxies', { pool_id: poolId, protocol: p.protocol, host: p.host, port: p.port, username: p.username, password: p.password }, { orIgnore: true })) added += 1;
         }
     });
     tx();
@@ -301,7 +300,7 @@ function importProxies(poolId, text, defaultProtocol = 'http') {
 }
 
 function setProxyEnabled(id, enabled) {
-    db.get().prepare('UPDATE proxies SET enabled = ? WHERE id = ?').run(enabled ? 1 : 0, id);
+    db.get().prepare(`UPDATE proxies SET enabled = ?, ${db.TOUCH} WHERE id = ?`).run(enabled ? 1 : 0, ...db.touch(), id);
     cache.clear();
 }
 
@@ -330,21 +329,16 @@ function recordHealth(id, { ok, latencyMs, error, slowMs, failuresBeforeDead }) 
         failCount = row.fail_count + 1;
         status = failCount >= failuresBeforeDead ? 'dead' : 'unknown';
     }
-    conn.prepare('UPDATE proxies SET status = ?, latency_ms = ?, fail_count = ?, last_checked_at = ?, last_error = ? WHERE id = ?').run(
+    conn.prepare(`UPDATE proxies SET status = ?, latency_ms = ?, fail_count = ?, last_checked_at = ?, last_error = ?, ${db.TOUCH} WHERE id = ?`).run(
         status,
         ok ? latencyMs : null,
         failCount,
         Date.now(),
         ok ? null : String(error || 'failed').slice(0, 300),
+        ...db.touch(),
         id
     );
-    conn.prepare('INSERT INTO proxy_checks (ts, proxy_id, ok, latency_ms, error) VALUES (?, ?, ?, ?, ?)').run(
-        Date.now(),
-        id,
-        ok ? 1 : 0,
-        ok ? latencyMs : null,
-        ok ? null : String(error || 'failed').slice(0, 200)
-    );
+    db.insert('proxy_checks', { proxy_id: id, ok: ok ? 1 : 0, latency_ms: ok ? latencyMs : null, error: ok ? null : String(error || 'failed').slice(0, 200) });
     cache.delete('proxy:' + id);
     return status;
 }
@@ -365,7 +359,7 @@ function defaultPoolId() {
  * @param {number} [requestedPoolId] pool picked by the user on the landing page
  */
 function resolvePoolId(user, startUrl, sites, requestedPoolId = null) {
-    if (requestedPoolId && canUsePool(user, requestedPoolId)) return Number(requestedPoolId);
+    if (isId(requestedPoolId) && canUsePool(user, requestedPoolId)) return requestedPoolId;
     if (user && user.pool_id) return user.pool_id;
     const host = hostOf(startUrl);
     if (host) {
@@ -402,7 +396,7 @@ function pickProxy(poolId, excludeIds = []) {
 
 /** Last health checks of one proxy (newest first) - Admin -> proxy history. */
 function proxyChecks(proxyId, limit = 100) {
-    return db.get().prepare('SELECT ts, ok, latency_ms, error FROM proxy_checks WHERE proxy_id = ? ORDER BY id DESC LIMIT ?').all(proxyId, limit);
+    return db.get().prepare('SELECT created_at AS ts, ok, latency_ms, error FROM proxy_checks WHERE proxy_id = ? ORDER BY id DESC LIMIT ?').all(proxyId, limit);
 }
 
 function isUsable(proxy) {
