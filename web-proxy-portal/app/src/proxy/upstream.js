@@ -48,6 +48,11 @@ async function settingsFor(proxy) {
  * @returns {{ poolId:number|null, proxy:object|null, error?:string }}
  */
 function chooseForNewSession(user, startUrl, enabledSites, requestedPoolId = null) {
+    // "No proxy": the server's own connection (default on the Browse page)
+    if (requestedPoolId === 'direct') {
+        if (!settings.get('allow_direct')) return { poolId: null, proxy: null, error: 'Browsing without a proxy is turned off by the administrator. Pick a proxy.' };
+        return { poolId: null, proxy: null, direct: true };
+    }
     const poolId = pools.resolvePoolId(user, startUrl, enabledSites, requestedPoolId);
     const proxy = pools.pickProxy(poolId);
     if (!proxy && settings.get('upstream_fallback') !== 'direct') {
@@ -69,6 +74,14 @@ function chooseForNewSession(user, startUrl, enabledSites, requestedPoolId = nul
  * @returns {Promise<{ ok:true } | { ok:false, error:string }>}
  */
 async function applyToSession(session, row) {
+    // No pool and no proxy = a "No proxy (direct)" session.
+    if (!row.pool_id && !row.proxy_id) {
+        if (!settings.get('allow_direct') && settings.get('upstream_fallback') !== 'direct') {
+            return { ok: false, error: 'Browsing without a proxy is turned off. Pick a proxy from the toolbar or start a new session.' };
+        }
+        if (session.__portalUpstreamKey !== 'direct') setOverride(session, 'direct', null);
+        return { ok: true };
+    }
     let proxy = row.proxy_id ? pools.getProxyWithSecrets(row.proxy_id) : null;
 
     if (!pools.isUsable(proxy)) {

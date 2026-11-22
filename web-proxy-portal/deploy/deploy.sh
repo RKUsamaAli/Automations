@@ -138,6 +138,17 @@ else
 fi
 node -v | as_app tee "$RELEASE_DIR/.node-version" >/dev/null
 
+# Headless Chromium for Google results (search worker). Installed once per
+# Playwright version into shared/ms-playwright (+ the Ubuntu libraries it needs).
+BROWSERS_DIR="$(app_env PLAYWRIGHT_BROWSERS_PATH "$SHARED_DIR/ms-playwright")"
+if ! (cd "$RELEASE_DIR" && as_app env PLAYWRIGHT_BROWSERS_PATH="$BROWSERS_DIR" node -e "process.exit(require('fs').existsSync(require('playwright-core').chromium.executablePath()) ? 0 : 1)" 2>/dev/null); then
+    log "Installing headless Chromium for search (first time / new Playwright version, about 1 minute)"
+    install -d -o "$APP_USER" -g "$APP_USER" "$BROWSERS_DIR"
+    (cd "$RELEASE_DIR" && PLAYWRIGHT_BROWSERS_PATH="$BROWSERS_DIR" node node_modules/playwright-core/cli.js install --with-deps chromium >/dev/null) \
+        && chown -R "$APP_USER:$APP_USER" "$BROWSERS_DIR" && ok "Chromium installed" \
+        || warn "Chromium install failed - Google results fall back to opening the search engine through the proxy"
+fi
+
 # ------------------------------------------------------ 3. rammerhead ---
 step "3/9 Rammerhead engine"
 # shellcheck disable=SC1090,SC1091

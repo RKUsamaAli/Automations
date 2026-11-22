@@ -16,6 +16,8 @@
  *   check-proxies                             run the upstream proxy health check once
  *   backup-db <file>                          consistent copy of the database
  *   seed-examples                             add the example injected scripts (disabled)
+ *   test-search "<words>" [pool name]           Google results through the search worker (and that
+ *                                             pool's proxy) - checks the whole search path on this server
  *   record-event <type> <info|warn|error> <detail...>
  *                                             write an activity-log entry (used by the deploy /
  *                                             rollback / backup scripts; types: deploy_*, rollback_*, backup_*, server_*)
@@ -138,6 +140,24 @@ async function main() {
                 console.log(`Added ${name} (disabled)`);
                 audit('cli_script_added', name);
             }
+            break;
+        }
+        case 'test-search': {
+            const words = need(args[0], 'test-search "<words>" [pool name]');
+            const pools = require('../services/pools');
+            let proxy = null;
+            if (args[1]) {
+                const pool = pools.getPoolByName(args[1]);
+                if (!pool) throw new Error(`No pool named ${args[1]}`);
+                proxy = pools.pickProxy(pool.id);
+                if (!proxy) throw new Error(`No online proxy in pool ${args[1]}`);
+            }
+            console.log(`Searching "${words}" via ${proxy ? `${proxy.host}:${proxy.port}` : 'no proxy (direct)'} ...`);
+            const started = Date.now();
+            const r = await require('../services/webSearch').search({ q: words, proxy });
+            console.log(`Engine: ${r.engine} - ${r.results.length} results in ${Date.now() - started} ms`);
+            if (r.note) console.log(`Note: ${r.note}`);
+            for (const x of r.results.slice(0, 5)) console.log(`  - ${x.title}\n    ${x.url}`);
             break;
         }
         case 'record-event': {

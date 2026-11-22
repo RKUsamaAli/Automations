@@ -3,6 +3,7 @@
  *
  *   portal-web   - login, landing page, admin panel, API   (APP_DOMAIN)
  *   portal-proxy - Rammerhead proxy engine                 (PROXY_DOMAIN)
+ *   portal-search - headless Chromium for Google results    (127.0.0.1 only)
  *
  * IMPORTANT: paths point at /opt/proxy-portal/current (a symlink). A deploy or
  * rollback only re-points that symlink and reloads PM2, so both processes
@@ -56,6 +57,23 @@ module.exports = {
             merge_logs: true,
             time: false,
             exp_backoff_restart_delay: 200 // back off if it crash-loops
+        },
+        {
+            // Google results via a real headless browser (Google refuses
+            // proxy-rewritten search pages). Internal only: 127.0.0.1:SEARCH_PORT.
+            name: 'portal-search',
+            cwd: CURRENT,
+            script: path.join(CURRENT, 'src/search/worker.js'),
+            exec_mode: 'fork',
+            instances: 1,
+            kill_timeout: 8000,
+            max_memory_restart: process.env.SEARCH_MAX_MEMORY || '600M', // node side; Chromium is a child process
+            env: { NODE_ENV: 'production', PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH || path.join(BASE, 'shared', 'ms-playwright') },
+            out_file: path.join(LOGS, 'search.out.log'),
+            error_file: path.join(LOGS, 'search.err.log'),
+            merge_logs: true,
+            time: false,
+            exp_backoff_restart_delay: 500
         }
     ]
 };

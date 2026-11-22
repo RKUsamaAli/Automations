@@ -152,6 +152,7 @@ router.get('/me', (req, res) => {
             notice: s.portal_notice,
             registration: s.registration_mode,
             userProxies: s.user_proxies_enabled,
+            allowDirect: s.allow_direct,
             proxyBaseUrl: config.proxyBaseUrl
         }
     });

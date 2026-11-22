@@ -28,11 +28,12 @@ const DEFAULTS = {
     max_sessions_per_user: 5, // concurrently active browsing sessions
 
     // --- Upstream proxies ---
+    allow_direct: true, // users may browse without a proxy (the server's own connection) - the default choice
     upstream_fallback: 'deny', // 'deny' = refuse when no healthy proxy, 'direct' = use the server's own IP
     upstream_failover: true, // move a session to another proxy of the same pool if its proxy dies
 
     // --- Search (Browse page address bar) ---
-    search_engine: 'duckduckgo', // duckduckgo | bing | google | custom (Google search blocks proxied pages)
+    search_engine: 'google', // google (results via the server's headless browser) | duckduckgo | bing | custom
     search_url_custom: '', // custom results page, {q} = the words, e.g. https://search.example/?q={q}
     search_suggest_url_custom: '', // optional, OpenSearch JSON ["q", ["a", "b"]], {q} = the words
     search_suggestions: true, // suggest search terms while typing (asks the search engine)

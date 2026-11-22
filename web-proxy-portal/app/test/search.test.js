@@ -17,16 +17,16 @@ test('classify: address or search words, like a browser address bar', () => {
     assert.equal(search.classify('  ').type, 'empty');
 });
 
-test('search engines: DuckDuckGo (no-JS) by default, others and custom templates', () => {
-    assert.equal(search.classify('best pizza').url, 'https://html.duckduckgo.com/html/?q=best%20pizza');
-    settings.update({ search_engine: 'google' });
-    assert.equal(search.searchUrl('a&b'), 'https://www.google.com/search?q=a%26b');
+test('search engines: Google by default (server browser), others and custom templates', () => {
+    assert.equal(search.classify('best pizza').url, 'https://www.google.com/search?q=best%20pizza');
+    settings.update({ search_engine: 'duckduckgo' });
+    assert.equal(search.searchUrl('a&b'), 'https://html.duckduckgo.com/html/?q=a%26b');
     settings.update({ search_engine: 'custom', search_url_custom: 'https://search.example/find?term={q}' });
     assert.equal(search.searchUrl('x y'), 'https://search.example/find?term=x%20y');
     settings.update({ search_engine: 'custom', search_url_custom: 'no placeholder' });
-    assert.equal(search.engine().name, 'DuckDuckGo', 'invalid custom template falls back to the default');
+    assert.equal(search.engine().name, 'Google', 'invalid custom template falls back to the default');
     assert.throws(() => settings.update({ search_engine: 'yahoo' }), /search_engine/);
-    settings.update({ search_engine: 'duckduckgo', search_url_custom: '' });
+    settings.update({ search_engine: 'google', search_url_custom: '' });
 });
 
 test('suggestions: OpenSearch JSON, cached, empty on failure or timeout', async () => {
@@ -55,6 +55,6 @@ test('suggestions: OpenSearch JSON, cached, empty on failure or timeout', async 
         assert.deepEqual(await search.suggestions('pasta'), [], 'switched off');
     } finally {
         server.close();
-        settings.update({ search_engine: 'duckduckgo', search_url_custom: '', search_suggest_url_custom: '', search_suggestions: true });
+        settings.update({ search_engine: 'google', search_url_custom: '', search_suggest_url_custom: '', search_suggestions: true });
     }
 });
