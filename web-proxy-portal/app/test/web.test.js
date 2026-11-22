@@ -278,7 +278,7 @@ test('browser errors are reported with the browser trail; exports work', async (
 
     const csv = await admin.req('GET', '/api/admin/events.csv');
     assert.equal(csv.status, 200);
-    assert.match(csv.text, /^time_utc,event,user_id,username,detail,ip\n/);
+    assert.match(csv.text, /^time_utc,time_local \(UTC\),event,user_id,username,detail,ip\n/);
     const jsonl = await admin.req('GET', '/api/admin/errors.jsonl?days=1');
     const lines = jsonl.text.trim().split('\n').map((l) => JSON.parse(l));
     assert.ok(lines.some((l) => l.ref === r.json.ref));
@@ -295,7 +295,7 @@ test('admin can read the request log, a session timeline and server health', asy
     const server = (await admin.req('GET', '/api/admin/server?hours=1')).json;
     assert.ok(Array.isArray(server.series) && Array.isArray(server.processes) && Array.isArray(server.traffic));
     const csv = await admin.req('GET', '/api/admin/requests.csv?hours=1');
-    assert.match(csv.text, /^time_utc,source,kind,username/);
+    assert.match(csv.text, /^time_utc,time_local \(UTC\),source,kind,username/);
 });
 
 test('admin lists: ?paged=1 returns batches + whole-set summary on the first batch only', async () => {
@@ -325,4 +325,20 @@ test('admin lists: ?paged=1 returns batches + whole-set summary on the first bat
     }
     // The plain (unpaged) answer stays an array for pickers and scripts.
     assert.ok(Array.isArray((await c.req('GET', '/api/admin/users')).json));
+});
+
+test('X-Timezone: the server uses the browser zone for "today" and remembers it', async () => {
+    const c = client();
+    await c.req('GET', '/login');
+    await c.req('POST', '/api/auth/login', { username: 'admin1', password: 'adminpass123' });
+    const r = await c.req('GET', '/api/admin/overview', undefined, { 'x-timezone': 'Asia/Karachi' });
+    assert.equal(r.json.timezone, 'Asia/Karachi');
+    assert.equal(r.headers.get('x-timezone-used'), 'Asia/Karachi');
+    // invalid zones are ignored (falls back to the remembered one)
+    const bad = await c.req('GET', '/api/admin/overview', undefined, { 'x-timezone': 'Not/AZone' });
+    assert.equal(bad.json.timezone, 'Asia/Karachi');
+    // CSV link without headers: ?tz=
+    const csv = await c.req('GET', '/api/admin/events.csv?tz=Asia/Kolkata');
+    assert.match(csv.text, /^time_utc,time_local \(Asia\/Kolkata\),/);
+    assert.match(csv.text, /\+05:30"/);
 });

@@ -188,7 +188,7 @@
         var d = new Date(ms);
         var today = new Date().toDateString() === d.toDateString();
         var text = today ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-        return '<span class="nowrap num" title="' + esc(d.toLocaleString()) + '">' + esc(text) + '</span>';
+        return '<span class="nowrap num" title="' + esc(d.toLocaleString() + ' ' + P.tz + ' · ' + d.toISOString().replace('T', ' ').slice(0, 19) + ' UTC') + '">' + esc(text) + '</span>';
     }
     function statusBadge(code) {
         if (!code) return '<span class="badge bad">Failed</span>';
@@ -403,6 +403,7 @@
         var o = results[0];
         var server = results[1];
         P.$('#release').textContent = o.release;
+        P.$('#tz-note').textContent = 'Times in ' + P.tz + ' (' + P.tzOffset() + ')';
         setCount('#pending-count', o.pendingUsers);
         setCount('#error-count', o.openErrors);
         var stat = function (label, value, href, bad) {
@@ -913,7 +914,7 @@
             return 'hours=' + reqFilter.hours + (reqFilter.user ? '&user=' + reqFilter.user.id : '') + (reqFilter.q ? '&q=' + encodeURIComponent(reqFilter.q) : '') + (reqFilter.kind ? '&kind=' + reqFilter.kind : '') + (reqFilter.status ? '&status=' + reqFilter.status : '');
         };
         view.innerHTML = pageHead('Requests', 'What users did: pages opened through the proxy, portal actions and every failure. Successful images and scripts are only stored with REQUEST_LOG_LEVEL=all.',
-            '<a class="btn" id="req-csv" href="/api/admin/requests.csv?' + qs() + '" download>Export CSV</a>') +
+            '<a class="btn" id="req-csv" href="' + P.withTz('/api/admin/requests.csv?' + qs()) + '" download>Export CSV</a>') +
             '<section class="panel"><div class="toolbar">' +
             '<input type="search" id="rq" placeholder="Search user, site, URL or request id" value="' + esc(reqFilter.q) + '" aria-label="Search requests">' +
             selectHtml('rkind', 'Type', reqFilter.kind, [['activity', 'User activity'], ['', 'All requests'], ['page', 'Proxied pages'], ['resource', 'Proxied resources'], ['api', 'Portal API'], ['view', 'Portal pages']]) +
@@ -931,7 +932,7 @@
         });
         renderChips();
         function loadList() {
-            P.$('#req-csv').setAttribute('href', '/api/admin/requests.csv?' + qs());
+            P.$('#req-csv').setAttribute('href', P.withTz('/api/admin/requests.csv?' + qs()));
             lazyTable({
                 mount: P.$('#req-list'),
                 url: '/api/admin/requests?' + qs(),
@@ -992,7 +993,7 @@
     function sevBadge(r) { return '<span class="badge ' + (r.severity === 'warning' ? 'warn' : 'bad') + '">' + esc(kindLabel(r.kind)) + '</span>'; }
 
     function errorsView() {
-        view.innerHTML = pageHead('Errors', 'Each report holds the steps the user took before the failure, so it can be reproduced. Users see the reference (e.g. E-7K2P9Q) on the error page.', '<a class="btn" href="/api/admin/errors.jsonl?days=30" download>Export (JSON Lines)</a>') +
+        view.innerHTML = pageHead('Errors', 'Each report holds the steps the user took before the failure, so it can be reproduced. Users see the reference (e.g. E-7K2P9Q) on the error page.', '<a class="btn" href="' + P.withTz('/api/admin/errors.jsonl?days=30') + '" download>Export (JSON Lines)</a>') +
             '<section class="panel"><div class="toolbar"><div class="seg" role="group" aria-label="Status">' + ['open', 'resolved', 'all'].map(function (st) {
                 return '<button type="button" data-filter="' + st + '" class="' + (errorFilter.status === st ? 'active' : '') + '" aria-pressed="' + (errorFilter.status === st) + '">' + st.charAt(0).toUpperCase() + st.slice(1) + '</button>';
             }).join('') + '</div>' +
@@ -1168,7 +1169,7 @@
     async function logsView() {
         var usage = await P.api('GET', '/api/admin/usage?days=7');
         var types = Object.keys(EVENT_LABELS).map(function (k) { return [k, EVENT_LABELS[k]]; }).sort(function (a, b) { return a[1].localeCompare(b[1]); });
-        view.innerHTML = pageHead('Activity log', 'Sign-ins, sessions, approvals, blocked sites, proxy changes, process restarts and admin actions.', '<a class="btn" href="/api/admin/events.csv" download>Export CSV</a>') +
+        view.innerHTML = pageHead('Activity log', 'Sign-ins, sessions, approvals, blocked sites, proxy changes, process restarts and admin actions.', '<a class="btn" href="' + P.withTz('/api/admin/events.csv') + '" download>Export CSV</a>') +
             '<div class="grid main-side">' +
             '<section class="panel"><div class="panel-head"><h2>Events</h2></div><div class="toolbar">' + selectHtml('etype', 'Event', logFilter.type, [['', 'All events']].concat(types)) +
             '<input type="search" id="eq" placeholder="Filter by user" aria-label="Filter events by user"><span class="chips" id="event-chips"></span></div><div id="event-list"></div></section>' +
@@ -1289,6 +1290,7 @@
     window.addEventListener('hashchange', function () { show(location.hash.slice(1) || 'dashboard'); });
     P.api('GET', '/api/admin/overview').then(function (o) {
         P.$('#release').textContent = o.release;
+        P.$('#tz-note').textContent = 'Times in ' + P.tz + ' (' + P.tzOffset() + ')';
         setCount('#pending-count', o.pendingUsers);
         setCount('#error-count', o.openErrors);
     }).catch(function () {});

@@ -12,7 +12,8 @@
             ['E-mail', u.email || 'Not set'],
             ['Role', u.role === 'admin' ? 'Administrator' : 'Member'],
             ['Member since', new Date(u.createdAt).toLocaleDateString()],
-            ['Last sign-in', u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleString() : '-']
+            ['Last sign-in', u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleString() : '-'],
+            ['Time zone', P.tz + ' (' + P.tzOffset() + ') · from this device']
         ];
         P.$('#profile').innerHTML = rows.map(function (r) { return '<dt>' + P.esc(r[0]) + '</dt><dd>' + P.esc(r[1]) + '</dd>'; }).join('');
     });

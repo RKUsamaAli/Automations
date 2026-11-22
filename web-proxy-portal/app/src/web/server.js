@@ -22,6 +22,7 @@ const config = require('../config');
 const db = require('../db');
 const log = require('../lib/logger')('web');
 const { securityHeaders, cookies, csrf } = require('./middleware/security');
+const { timezone } = require('./middleware/timezone');
 const { loadUser, requireUser, requireAdmin } = require('./middleware/auth');
 const { requestId, recordTrail, errorHandler } = require('./middleware/observability');
 const metrics = require('../services/metrics');
@@ -54,6 +55,7 @@ app.use(express.json({ limit: '1mb' }));
 app.use(cookies);
 app.use(csrf);
 app.use(loadUser);
+app.use(timezone);
 app.use(recordTrail);
 
 // Static assets (css/js). HTML pages are served by explicit routes below.

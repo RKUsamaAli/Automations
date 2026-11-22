@@ -91,8 +91,24 @@
     }
 
     /** JSON API call. Rejects with an Error carrying the server's message (and .reason). */
+    // ============================================================ time zone ==
+    // The database stores UTC only. Every API call tells the server the
+    // browser's zone (X-Timezone) so "today", per-day charts and daily limits
+    // use local midnight; the page itself renders times in local time.
+    var TZ = (function () {
+        try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch (_) { return 'UTC'; }
+    })();
+    /** "UTC+05:00" for the browser's current offset. */
+    function tzOffset() {
+        var m = -new Date().getTimezoneOffset();
+        var a = Math.abs(m);
+        return 'UTC' + (m < 0 ? '-' : '+') + String(Math.floor(a / 60)).padStart(2, '0') + ':' + String(a % 60).padStart(2, '0');
+    }
+    /** Adds ?tz= to a plain link (downloads cannot send headers). */
+    function withTz(url) { return url + (url.indexOf('?') >= 0 ? '&' : '?') + 'tz=' + encodeURIComponent(TZ); }
+
     async function api(method, url, body) {
-        var opts = { method: method, headers: { 'X-CSRF-Token': readCookie('pp_csrf') }, credentials: 'same-origin' };
+        var opts = { method: method, headers: { 'X-CSRF-Token': readCookie('pp_csrf'), 'X-Timezone': TZ }, credentials: 'same-origin' };
         if (body !== undefined) {
             opts.headers['Content-Type'] = 'application/json';
             opts.body = JSON.stringify(body);
@@ -458,6 +474,7 @@
         api: api, esc: esc, $: $, $all: $all, toast: toast, showError: showError, busy: busy,
         formatBytes: formatBytes, timeAgo: timeAgo, formatDate: formatDate, colorFor: colorFor,
         confirm: confirmDialog, setupReveal: setupReveal, icon: icon, shell: shell, loadMe: loadMe, logout: logout,
-        reportError: reportError, crumb: crumb, suggest: suggest, filterOptions: filterOptions
+        reportError: reportError, crumb: crumb, suggest: suggest, filterOptions: filterOptions,
+        tz: TZ, tzOffset: tzOffset, withTz: withTz
     };
 })();

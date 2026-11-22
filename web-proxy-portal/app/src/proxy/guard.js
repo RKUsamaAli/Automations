@@ -242,7 +242,7 @@ function createGuard({ rh, sessionStore }) {
             return deny(req, res, isWebsocket, 429, 'Too many requests, slow down.', { navigation, extraHeaders: { 'Retry-After': String(retry) } });
         }
         const capMb = user.bandwidth_limit_mb_day ?? s.bandwidth_limit_mb_day;
-        if (capMb && usage.bytesToday(user.id) > capMb * 1024 * 1024) {
+        if (capMb && usage.bytesToday(user.id, user.timezone) > capMb * 1024 * 1024) {
             return deny(req, res, isWebsocket, 429, `Daily bandwidth limit (${capMb} MB) reached. It resets at 00:00 UTC.`, { navigation });
         }
 

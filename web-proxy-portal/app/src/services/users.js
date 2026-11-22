@@ -9,7 +9,7 @@ const TtlCache = require('../lib/ttlCache');
 const paging = require('../lib/paging');
 
 const PUBLIC_FIELDS = `id, username, email, role, enabled, pending, pool_id, rate_limit_rpm, bandwidth_limit_mb_day,
-    token_version, note, created_at, last_login_at,
+    token_version, note, created_at, last_login_at, timezone,
     (password_hash IS NOT NULL) AS has_password, (access_token_hash IS NOT NULL) AS has_token`;
 
 // Short cache used by the proxy engine on every request.
@@ -88,6 +88,16 @@ function pageSummary({ q = '' } = {}) {
         )
         .get(Date.now() - 7 * 86400000, ...args);
     return { total: r.total, approved: r.approved || 0, admins: r.admins || 0, disabled: r.disabled || 0, pending: r.pending || 0, active7d: r.active7d || 0 };
+}
+
+/**
+ * Remembers the user's browser time zone (sent as X-Timezone). Only writes
+ * when it changed, so normal requests cost nothing.
+ */
+function setTimezone(id, tz) {
+    const changed = db.get().prepare('UPDATE users SET timezone = ? WHERE id = ? AND timezone IS NOT ?').run(tz, id, tz).changes;
+    if (changed) cache.delete(id);
+    return changed > 0;
 }
 
 function count() {
@@ -269,6 +279,7 @@ function markLogin(id) {
 }
 
 module.exports = {
+    setTimezone,
     page,
     pageSummary,
     getById,

@@ -32,6 +32,7 @@ const healthCheck = require('../../jobs/healthCheck');
 const config = require('../../config');
 const errorReports = require('../../services/errorReports');
 const suggest = require('../../services/suggest');
+const tzlib = require('../../lib/timezone');
 const requestLog = require('../../services/requestLog');
 const metrics = require('../../services/metrics');
 const { isBug } = require('../../lib/errors');
@@ -60,19 +61,20 @@ const audit = (req, type, detail) => events.record(type, { userId: req.user.id, 
 // ------------------------------------------------------------ overview ----
 router.get(
     '/overview',
-    h(() => {
+    h((req) => {
         const poolList = pools.listPools();
         return {
             release: config.releaseName,
-            sessions: sessions.stats(),
+            timezone: req.tz, // "today" below = since local midnight in this zone
+            sessions: sessions.stats(req.tz),
             users: users.count(),
             pendingUsers: users.countPending(),
             openErrors: errorReports.countOpen(),
             pools: poolList.length,
             proxies: poolList.reduce((a, p) => a + p.proxy_count, 0),
             usableProxies: poolList.reduce((a, p) => a + p.usable_count, 0),
-            usageToday: usage.daily(1)[0] || { requests: 0, bytes: 0 },
-            daily: usage.daily(14),
+            usageToday: usage.today(req.tz),
+            daily: usage.daily(14, req.tz),
             recentEvents: events.list({ limit: 15 })
         };
     })
@@ -320,7 +322,7 @@ router.post(
         audit(req, 'admin_session_ended', req.params.id.slice(0, 8));
     })
 );
-router.get('/usage', h((req) => ({ users: usage.summary(Number(req.query.days) || 7), daily: usage.daily(Number(req.query.days) || 14) })));
+router.get('/usage', h((req) => ({ timezone: req.tz, users: usage.summary(Number(req.query.days) || 7, req.tz), daily: usage.daily(Number(req.query.days) || 14, req.tz) })));
 router.get(
     '/events',
     h((req) => {
@@ -339,9 +341,9 @@ const csvCell = (v) => {
 router.get('/events.csv', (req, res) => {
     const rows = events.list({ limit: 1000000 }).reverse();
     res.set('Content-Type', 'text/csv; charset=utf-8');
-    res.set('Content-Disposition', `attachment; filename="portal-events-${new Date().toISOString().slice(0, 10)}.csv"`);
-    res.write('time_utc,event,user_id,username,detail,ip\n');
-    for (const e of rows) res.write([new Date(e.created_at).toISOString(), e.type, e.user_id, e.username, e.detail, e.ip].map(csvCell).join(',') + '\n');
+    res.set('Content-Disposition', `attachment; filename="portal-events-${tzlib.dayKey(Date.now(), req.tz)}.csv"`);
+    res.write(`time_utc,time_local (${req.tz}),event,user_id,username,detail,ip\n`);
+    for (const e of rows) res.write([new Date(e.created_at).toISOString(), tzlib.formatLocal(e.created_at, req.tz), e.type, e.user_id, e.username, e.detail, e.ip].map(csvCell).join(',') + '\n');
     res.end();
 });
 
@@ -366,10 +368,10 @@ router.get(
 router.get('/requests.csv', (req, res) => {
     const rows = requestLog.list({ ...reqFilter(req.query), since: Date.now() - (Number(req.query.hours) || 24) * 3600000, limit: 100000 }).reverse();
     res.set('Content-Type', 'text/csv; charset=utf-8');
-    res.set('Content-Disposition', `attachment; filename="portal-requests-${new Date().toISOString().slice(0, 10)}.csv"`);
-    res.write('time_utc,source,kind,username,session,method,status,ms,bytes,host,url,proxy_id,request_id,error\n');
+    res.set('Content-Disposition', `attachment; filename="portal-requests-${tzlib.dayKey(Date.now(), req.tz)}.csv"`);
+    res.write(`time_utc,time_local (${req.tz}),source,kind,username,session,method,status,ms,bytes,host,url,proxy_id,request_id,error\n`);
     for (const r of rows) {
-        res.write([new Date(r.ts).toISOString(), r.source, r.kind, r.username, r.session_id ? r.session_id.slice(0, 8) : '', r.method, r.status, r.ms, r.bytes, r.host, r.url, r.proxy_id, r.request_id, r.error].map(csvCell).join(',') + '\n');
+        res.write([new Date(r.ts).toISOString(), tzlib.formatLocal(r.ts, req.tz), r.source, r.kind, r.username, r.session_id ? r.session_id.slice(0, 8) : '', r.method, r.status, r.ms, r.bytes, r.host, r.url, r.proxy_id, r.request_id, r.error].map(csvCell).join(',') + '\n');
     }
     res.end();
 });
@@ -418,8 +420,11 @@ router.get(
 router.get('/errors.jsonl', (req, res) => {
     const days = Math.min(Number(req.query.days) || 7, 90);
     res.set('Content-Type', 'application/x-ndjson; charset=utf-8');
-    res.set('Content-Disposition', `attachment; filename="portal-errors-${new Date().toISOString().slice(0, 10)}.jsonl"`);
-    for (const r of errorReports.exportRange(Date.now() - days * 86400000)) res.write(JSON.stringify(r) + '\n');
+    res.set('Content-Disposition', `attachment; filename="portal-errors-${tzlib.dayKey(Date.now(), req.tz)}.jsonl"`);
+    // Timestamps stay UTC epoch ms; *_local fields are added for reading in the viewer's zone.
+    for (const r of errorReports.exportRange(Date.now() - days * 86400000)) {
+        res.write(JSON.stringify({ ...r, timezone: req.tz, created_at_local: tzlib.formatLocal(r.created_at, req.tz), last_seen_at_local: tzlib.formatLocal(r.last_seen_at, req.tz) }) + '\n');
+    }
     res.end();
 });
 router.get(

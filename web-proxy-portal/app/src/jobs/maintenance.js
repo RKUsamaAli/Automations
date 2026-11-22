@@ -9,6 +9,7 @@ const sessions = require('../services/sessions');
 const errorReports = require('../services/errorReports');
 const requestLog = require('../services/requestLog');
 const metrics = require('../services/metrics');
+const usage = require('../services/usage');
 const log = require('../lib/logger')('maintenance');
 
 const RETENTION_DAYS = Number(process.env.LOG_RETENTION_DAYS) || 30;
@@ -21,10 +22,7 @@ function run() {
     const requestRows = requestLog.prune(Number(process.env.REQUEST_LOG_RETENTION_DAYS) || 14);
     const metricRows = metrics.prune(Number(process.env.METRICS_RETENTION_DAYS) || 30);
     const checkRows = db.get().prepare('DELETE FROM proxy_checks WHERE ts < ?').run(Date.now() - 30 * 86400000).changes;
-    const usageRows = db
-        .get()
-        .prepare('DELETE FROM usage_daily WHERE day < ?')
-        .run(new Date(Date.now() - 180 * 86400000).toISOString().slice(0, 10)).changes;
+    const usageRows = usage.prune(180);
     if (ticketRows + eventRows + sessionRows + usageRows + errorRows + requestRows + metricRows + checkRows) {
         log.info('pruned old rows', { tickets: ticketRows, events: eventRows, sessions: sessionRows, usage: usageRows, errorReports: errorRows, requests: requestRows, metrics: metricRows, proxyChecks: checkRows });
     }

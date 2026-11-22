@@ -8,6 +8,7 @@
  */
 const db = require('../db');
 const paging = require('../lib/paging');
+const tzlib = require('../lib/timezone');
 const TtlCache = require('../lib/ttlCache');
 
 // Short TTL: the portal (another process) ends sessions by writing the DB,
@@ -152,11 +153,12 @@ function addUsage(id, requests, bytes, lastSeenAt) {
         .run(requests, bytes, lastSeenAt, id);
 }
 
-function stats() {
+/** Active sessions + sessions started since local midnight in `tz`. */
+function stats(tz = 'UTC') {
     const conn = db.get();
     return {
         active: conn.prepare('SELECT COUNT(*) AS n FROM sessions WHERE ended_at IS NULL').get().n,
-        today: conn.prepare('SELECT COUNT(*) AS n FROM sessions WHERE created_at >= ?').get(new Date().setUTCHours(0, 0, 0, 0)).n
+        today: conn.prepare('SELECT COUNT(*) AS n FROM sessions WHERE created_at >= ?').get(tzlib.startOfDay(tzlib.normalize(tz))).n
     };
 }
 
