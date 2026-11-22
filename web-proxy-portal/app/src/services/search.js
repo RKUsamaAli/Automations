@@ -30,7 +30,13 @@ const SUGGEST_TIMEOUT_MS = 1500;
 function engine() {
     const s = settings.getAll();
     if (s.search_engine === 'custom' && /\{q\}/.test(s.search_url_custom || '')) {
-        return { name: 'Search', search: s.search_url_custom, suggest: /\{q\}/.test(s.search_suggest_url_custom || '') ? s.search_suggest_url_custom : null };
+        let name = 'the web';
+        try {
+            name = new URL(s.search_url_custom.replace(/\{q\}/g, 'x')).hostname.replace(/^www\./, '');
+        } catch (_) {
+            /* keep the generic name */
+        }
+        return { name, search: s.search_url_custom, suggest: /\{q\}/.test(s.search_suggest_url_custom || '') ? s.search_suggest_url_custom : null };
     }
     return ENGINES[s.search_engine] || ENGINES.google;
 }

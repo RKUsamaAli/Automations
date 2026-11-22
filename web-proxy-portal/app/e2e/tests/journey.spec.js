@@ -166,7 +166,7 @@ test.describe.serial('full product journey', () => {
         }).toPass({ timeout: 10000 });
         await shot(phone, '10-browse-iphone');
         // address bar suggests the admin's sites while typing
-        await phone.locator('#url').fill('Demo');
+        await phone.locator('#url').fill(siteName);
         await expect(phone.getByRole('option', { name: new RegExp(siteName) })).toBeVisible();
         await shot(phone, '10b-browse-suggestions-iphone', { fullPage: false });
         await phone.locator('#url').press('Escape');
@@ -223,13 +223,13 @@ test.describe.serial('full product journey', () => {
         await shot(phone, '10c-search-suggestions-iphone', { fullPage: false });
         await phone.getByRole('option', { name: /lemons recipes/ }).click();
         await expect(phone.locator('#search-title')).toHaveText('Results for "lemons recipes"');
-        expect(phone.url()).toContain('/http://shop.localtest/search?q=lemons');
+        expect(phone.url()).toMatch(new RegExp('^' + S.proxyUrl.replace(/[.]/g, '\\.') + '/[0-9a-f]{32}/')); // opened THROUGH the proxy (address is scrambled by the engine)
         await shot(phone, '10d-search-results-iphone', { fullPage: false });
         await phone.locator('#result-1').click();
         await expect(phone.locator('#shop-title')).toHaveText('Fresh picks today');
         await phone.goto(S.appUrl + '/');
         // typing an address still opens the site directly
-        await phone.locator('#url').fill('shop.localtest/login');
+        await phone.locator('#url').fill('http://shop.localtest/login'); // typed addresses default to https; the fake shop is http only
         await phone.locator('#url').press('Escape');
         await phone.locator('#go').click();
         await expect(phone.locator('#shop-login')).toBeVisible();
@@ -267,13 +267,15 @@ test.describe.serial('full product journey', () => {
 
     // ------------------------------------------------------------ cleanup --
     test('ending a session kills its link', async () => {
-        await expect(phone.locator('#sessions li')).toHaveCount(2);
+        await expect(phone.locator('#sessions li').first()).toBeVisible();
+        const before = await phone.locator('#sessions li').count(); // site tile, own proxy, search, typed address
+        expect(before).toBeGreaterThanOrEqual(2);
         const first = phone.locator('#sessions li').filter({ hasText: 'shop.localtest' }).last();
         await first.getByRole('button', { name: 'End' }).click();
         await expect(phone.getByRole('alertdialog')).toBeVisible();
         await shot(phone, '16-end-session-confirm-iphone', { fullPage: false });
         await phone.getByRole('alertdialog').getByRole('button', { name: 'End session' }).click();
-        await expect(phone.locator('#sessions li')).toHaveCount(1);
+        await expect(phone.locator('#sessions li')).toHaveCount(before - 1);
         // The proxy notices within ~2 seconds (short cache, separate process).
         await expect(async () => {
             await phone.goto(proxiedUrl);
@@ -364,7 +366,8 @@ test.describe.serial('full product journey', () => {
         await opt.click();
         await expect(admin.locator('#req-chips')).toContainText('User: ' + user.name);
         await expect(async () => {
-            const names = await admin.locator('#req-list tbody tr td:nth-child(2)').allTextContents();
+            // the cell shows the username, then the device on a second line
+            const names = await admin.locator('#req-list tbody tr td:nth-child(2)').evaluateAll((tds) => tds.map((td) => td.firstChild.textContent));
             expect(names.length).toBeGreaterThan(0);
             expect(new Set(names)).toEqual(new Set([user.name]));
         }).toPass({ timeout: 5000 });
