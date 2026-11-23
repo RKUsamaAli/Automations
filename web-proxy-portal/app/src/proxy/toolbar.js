@@ -170,6 +170,7 @@ function setupToolbarRoutes(proxyServer) {
             { url: null, host: null, query: q }
         ).replace(/<\/script/gi, '<\\/script');
         if (!searchLimiter.hit(`s:${user.id}`, 20)) return html(429, resultsPage({ q, sid: row.id, r: null, error: 'Too many searches. Wait a minute and try again.', toolbar }));
+        require('../services/searchHistory').record(user.id, q);
         const proxy = row.proxy_id ? pools.getProxyWithSecrets(row.proxy_id) : null;
         const lang = String(req.headers['accept-language'] || 'en').split(/[,;-]/)[0].toLowerCase().replace(/[^a-z]/g, '').slice(0, 5) || 'en';
         try {
@@ -178,7 +179,9 @@ function setupToolbarRoutes(proxyServer) {
             html(200, resultsPage({ q, sid: row.id, r, toolbar }));
         } catch (e) {
             log.warn('top bar search failed', { error: e.message });
-            html(e.status === 503 ? 503 : 502, resultsPage({ q, sid: row.id, r: null, error: e.message, toolbar }));
+            events.record('search_failed', { userId: user.id, detail: `${q.slice(0, 120)}: ${e.detail || e.message}`.slice(0, 500) });
+            const why = user.role === 'admin' && e.detail ? ` Reason (shown to admins): ${e.detail}` : '';
+            html(e.status === 503 ? 503 : 502, resultsPage({ q, sid: row.id, r: null, error: e.message + why, toolbar }));
         }
     });
 
@@ -217,6 +220,7 @@ function setupToolbarRoutes(proxyServer) {
                 return sendJson(res, 200, { location: `/__portal/results?sid=${encodeURIComponent(ok.row.id)}&q=${encodeURIComponent(kind.query)}` });
             }
             const target = normalizeUrl(kind.type === 'search' ? kind.url : kind.input);
+            if (kind.type === 'search') require('../services/searchHistory').record(ok.user.id, kind.query);
             if (kind.type === 'search') events.record('search', { userId: ok.user.id, detail: `${search.engine().name}: ${String(kind.query).slice(0, 200)} (toolbar)` });
             sendJson(res, 200, { location: `/${ok.row.id}/${target}` });
         } catch (e) {

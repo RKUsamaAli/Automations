@@ -1,5 +1,6 @@
-/* Browse page: search-engine style start page (search in the middle), the
-   connection switch (no proxy by default / a proxy pool) and sessions at the side. */
+/* Start page: only the search box in the middle, recent searches under it.
+   Signed in: the proxy chip in the top bar (no proxy by default / a proxy pool).
+   Signed out: searching asks to sign in first. */
 (function () {
     'use strict';
     var P = window.Portal;
@@ -8,21 +9,20 @@
     var poolsById = {};
     var siteList = [];
     var serverSearch = true; // Google results via the server's browser (portal.searchServer)
+    var signedIn = false;
 
     /** 'direct' (proxy switch off), a pool id, or 'auto' (automatic proxy). */
     function selectedPool() {
-        if (!P.$('#proxy-on').checked) return 'direct';
+        if (!P.$('#proxy-on') || !P.$('#proxy-on').checked) return 'direct';
         return P.$('#pool').value || 'auto';
     }
     function goSearch(q) {
         location.href = '/search?q=' + encodeURIComponent(q) + '&via=' + encodeURIComponent(selectedPool());
     }
-    function hostOf(url) {
-        try { return new URL(url).hostname; } catch (_) { return url || '-'; }
-    }
 
     /** Asks the portal for a one-time hand-off link and opens the proxy. */
     async function browse(body, button) {
+        if (!signedIn) { location.href = '/login?next=/'; return; }
         var done = P.busy(button, 'Opening');
         P.showError(goError, '');
         try {
@@ -45,11 +45,12 @@
             return P.$('#url').focus();
         }
         P.$('#url').removeAttribute('aria-invalid');
+        // signed out: sign in first, then come back here and run it
+        if (!signedIn) { location.href = '/login?next=' + encodeURIComponent('/?q=' + url); return; }
         // words -> results page (Google via the server's browser); an address -> that site
         if (serverSearch && !LOOKS_LIKE_URL.test(url)) return goSearch(url);
         browse({ url: url }, P.$('#go'));
     });
-    P.$('#refresh').addEventListener('click', loadSessions);
 
     // Address bar: words -> search results (through the proxy), an address -> that site.
     // Suggestions while typing: the main action first ("Search Google for ..." /
@@ -60,20 +61,28 @@
     P.suggest(P.$('#url'), {
         source: function (q) {
             q = q.trim();
+            if (!signedIn) {
+                var u = LOOKS_LIKE_URL.test(q);
+                return Promise.resolve(q ? [{ items: [{ value: q, label: q, hint: u ? 'Go to this address' : 'Search ' + engineName, action: true }] }] : []);
+            }
             var sites = P.filterOptions(siteList.map(function (s) { return { value: s.startUrl, label: s.name, hint: s.host, siteId: s.id }; }), q, 4);
             var isUrl = LOOKS_LIKE_URL.test(q);
             var main = q ? [{ value: q, label: isUrl ? q : q, hint: isUrl ? 'Go to this address' : 'Search ' + engineName, action: true }] : [];
             return Promise.all([
                 P.api('GET', '/api/portal/recent?q=' + encodeURIComponent(q)).catch(function () { return []; }),
-                q.length >= 2 && !isUrl ? P.api('GET', '/api/portal/search-suggest?q=' + encodeURIComponent(q)).catch(function () { return { suggestions: [] }; }) : Promise.resolve({ suggestions: [] })
+                q.length >= 2 && !isUrl ? P.api('GET', '/api/portal/search-suggest?q=' + encodeURIComponent(q)).catch(function () { return { suggestions: [] }; }) : Promise.resolve({ suggestions: [] }),
+                !isUrl ? P.api('GET', '/api/portal/searches?limit=6&q=' + encodeURIComponent(q)).catch(function () { return []; }) : Promise.resolve([])
             ]).then(function (r) {
                 var known = {};
                 sites.forEach(function (s) { known[s.hint] = true; });
                 if (r[1].engine) { engineName = r[1].engine; if (main[0] && !isUrl) main[0].hint = 'Search ' + engineName; }
                 var terms = (r[1].suggestions || []).filter(function (t) { return t.toLowerCase() !== q.toLowerCase(); }).slice(0, 5)
                     .map(function (t) { return { value: t, label: t, hint: 'Search', search: true }; });
+                var past = (r[2] || []).filter(function (x) { return x.query.toLowerCase() !== q.toLowerCase(); }).slice(0, 4)
+                    .map(function (x) { return { value: x.query, label: x.query, hint: 'Searched before', search: true }; });
                 return [
                     { items: main },
+                    { label: 'Recent searches', items: past },
                     { label: 'Your sites', items: sites },
                     { label: 'Recently opened', items: r[0].filter(function (x) { return !known[x.label] && !known['www.' + x.label]; }).slice(0, 4) },
                     { label: 'Search suggestions', items: terms }
@@ -112,9 +121,9 @@
             P.$('#via').classList.toggle('hidden', !on);
             var p = poolsById[select.value];
             P.$('#pool-health').textContent = on && p ? p.usable + ' of ' + p.total + ' online' : '';
-            P.$('#conn-line').innerHTML = on
-                ? '<span class="dot ok"></span>Through a proxy: ' + esc(p ? p.name : 'automatic')
-                : '<span class="dot"></span>No proxy: direct connection';
+            P.$('#conn-line').textContent = on ? (p ? p.name + (p.country ? ' · ' + p.country : '') : 'Automatic proxy') : 'No proxy';
+            P.$('#conn-dot').className = 'dot' + (on ? (p && !p.usable ? ' bad' : ' ok') : '');
+            P.$('#conn-chip').title = on ? 'New sessions go out through a proxy' : "No proxy: websites see the server's own connection";
             try { localStorage.setItem('portal.connection', JSON.stringify({ proxy: on, pool: select.value })); } catch (_) { /* ignore */ }
         };
         sw.addEventListener('change', update);
@@ -136,114 +145,53 @@
         });
     }
 
-    /** "● yneehewk-ES-19 @ p.webshare.io:80 · 2.2 s · My proxies" */
-    function proxyLabel(x) { return (x.username ? x.username + ' @ ' : '') + x.host + ':' + x.port; }
-    function latency(ms) { return ms == null ? '' : ms >= 1000 ? (Math.round(ms / 100) / 10) + ' s' : ms + ' ms'; }
-    function proxyBadge(s) {
-        if (!s.proxy_host) return '<span class="dot"></span>Direct (server IP)';
-        var tone = s.proxy_status === 'dead' ? 'bad' : s.proxy_status === 'slow' ? 'warn' : 'ok';
-        return '<span class="dot ' + tone + '"></span>via ' + esc(proxyLabel({ username: s.proxy_username, host: s.proxy_host, port: s.proxy_port })) +
-            (s.proxy_latency_ms != null ? ' · ' + esc(latency(s.proxy_latency_ms)) : '') + (s.pool_name ? ' · ' + esc(s.pool_owner ? 'My proxies' : s.pool_name) : '');
-    }
-
-    /** Picker: every proxy the user may use, grouped by pool, current one selected. */
-    async function chooseProxy(sessionId) {
-        var data;
-        try { data = await P.api('GET', '/api/portal/sessions/' + encodeURIComponent(sessionId) + '/proxies'); } catch (err) { return P.toast(err.message); }
-        var wrap = document.createElement('div');
-        wrap.className = 'dialog-backdrop';
-        var groups = data.pools.map(function (pool) {
-            return '<fieldset class="proxy-group"><legend>' + esc(pool.name) + (pool.country ? ' · ' + esc(pool.country) : '') + '</legend>' +
-                pool.proxies.map(function (x) {
-                    var tone = !x.usable ? 'bad' : x.status === 'slow' ? 'warn' : x.status === 'healthy' ? 'ok' : '';
-                    var state = !x.enabled ? 'Disabled' : x.status === 'dead' ? 'Offline' : x.status === 'slow' ? 'Slow' : x.status === 'healthy' ? 'Online' : 'Not checked';
-                    return '<label class="proxy-option' + (x.usable ? '' : ' disabled') + '"><input type="radio" name="proxy" value="' + esc(x.id) + '"' +
-                        (x.current ? ' checked' : '') + (x.usable ? '' : ' disabled') + '>' +
-                        '<span class="grow"><span class="mono">' + esc(x.label) + '</span>' + (x.current ? ' <span class="badge accent plain">Current</span>' : '') +
-                        '<span class="meta"><span class="dot ' + tone + '"></span>' + state + (x.latency_ms != null ? ' · ' + esc(latency(x.latency_ms)) : '') +
-                        (x.active_sessions ? ' · ' + x.active_sessions + ' session' + (x.active_sessions > 1 ? 's' : '') : '') + '</span></span></label>';
-                }).join('') + '</fieldset>';
+    /** Recent searches under the search box: tap to search again, x to forget one. */
+    async function loadRecent() {
+        var list = await P.api('GET', '/api/portal/searches?limit=8');
+        var box = P.$('#recent');
+        box.classList.toggle('hidden', !list.length);
+        P.$('#recent-list').innerHTML = list.map(function (x) {
+            return '<li><button type="button" class="recent-q" data-q="' + esc(x.query) + '">' + P.icon('clock', 'icon') + '<span>' + esc(x.query) + '</span></button>' +
+                '<button type="button" class="recent-x" data-del="' + esc(x.id) + '" aria-label="Remove ' + esc(x.query) + ' from recent searches">&times;</button></li>';
         }).join('');
-        wrap.innerHTML = '<form class="dialog proxy-dialog" role="dialog" aria-modal="true" aria-labelledby="px-title" novalidate>' +
-            '<h2 id="px-title">Change proxy</h2>' +
-            '<p class="muted small">The next page you open in this session goes out through the selected proxy. The site\'s cookies stay; sites that tie a login to the IP address may ask you to sign in again.</p>' +
-            '<div class="proxy-list">' + (groups || '<p class="muted">No proxies available.</p>') + '</div>' +
-            '<div class="alert error hidden" role="alert" id="px-error"></div>' +
-            '<div class="row end"><button type="button" data-cancel>Cancel</button><button type="submit" class="primary" id="px-go">Use this proxy</button></div></form>';
-        document.body.appendChild(wrap);
-        var close = function () { wrap.remove(); document.removeEventListener('keydown', onKey); };
-        var onKey = function (e) { if (e.key === 'Escape') close(); };
-        document.addEventListener('keydown', onKey);
-        wrap.addEventListener('click', function (e) { if (e.target === wrap) close(); });
-        P.$('[data-cancel]', wrap).addEventListener('click', close);
-        var first = P.$('input:checked', wrap) || P.$('input:not([disabled])', wrap);
-        if (first) first.focus();
-        P.$('form', wrap).addEventListener('submit', async function (e) {
-            e.preventDefault();
-            var picked = P.$('input[name=proxy]:checked', wrap);
-            if (!picked) return P.showError(P.$('#px-error', wrap), 'Pick a proxy');
-            var done = P.busy(P.$('#px-go', wrap), 'Switching');
-            try {
-                var r = await P.api('POST', '/api/portal/sessions/' + encodeURIComponent(sessionId) + '/proxy', { proxyId: picked.value });
-                close();
-                P.toast(r.changed ? 'Now using ' + r.proxy + '. Reload the site to continue through it.' : 'Already using that proxy', 5000);
-                loadSessions();
-            } catch (err) {
-                done();
-                P.showError(P.$('#px-error', wrap), err.message);
-            }
+        P.$all('[data-q]', box).forEach(function (b) {
+            b.addEventListener('click', function () { P.$('#url').value = b.getAttribute('data-q'); goSearch(b.getAttribute('data-q')); });
         });
-    }
-
-    async function loadSessions() {
-        var list = await P.api('GET', '/api/portal/sessions');
-        var ul = P.$('#sessions');
-        P.$('#session-count').textContent = list.length ? '(' + list.length + ')' : '';
-        if (!list.length) {
-            ul.innerHTML = '<li class="empty"><div><strong>No active sessions</strong>Open a website above to start one.</div></li>';
-            return;
-        }
-        ul.innerHTML = list.map(function (s) {
-            var host = hostOf(s.start_url);
-            return '<li><span class="initial" aria-hidden="true">' + esc(host.replace(/^www\./, '').charAt(0)) + '</span>' +
-                '<div class="grow"><div class="title">' + esc(host) + '</div><div class="meta">Started ' + esc(P.timeAgo(s.created_at)) +
-                ' · used ' + esc(P.timeAgo(s.last_seen_at)) + ' · ' + esc(P.formatBytes(s.bytes)) + '</div>' +
-                '<div class="meta via-line" title="Upstream proxy this session goes out through">' + proxyBadge(s) + '</div></div>' +
-                '<div class="actions"><button type="button" class="small primary" data-resume="' + esc(s.id) + '" aria-label="Resume ' + esc(host) + '">Resume</button>' +
-                '<button type="button" class="small" data-proxy="' + esc(s.id) + '" aria-label="Change the proxy of ' + esc(host) + '">Proxy</button>' +
-                '<button type="button" class="small" data-end="' + esc(s.id) + '" aria-label="End session on ' + esc(host) + '">End</button></div></li>';
-        }).join('');
-        P.$all('[data-proxy]', ul).forEach(function (btn) {
-            btn.addEventListener('click', function () { chooseProxy(btn.getAttribute('data-proxy')); });
-        });
-        P.$all('[data-resume]', ul).forEach(function (btn) {
-            btn.addEventListener('click', function () { browse({ sessionId: btn.getAttribute('data-resume') }, btn); });
-        });
-        P.$all('[data-end]', ul).forEach(function (btn) {
-            btn.addEventListener('click', async function () {
-                var ok = await P.confirm('The site will forget your login for this session.', { title: 'End this session?', confirmLabel: 'End session', danger: true });
-                if (!ok) return;
-                var done = P.busy(btn, 'Ending');
-                try {
-                    await P.api('DELETE', '/api/portal/sessions/' + encodeURIComponent(btn.getAttribute('data-end')));
-                    P.toast('Session ended');
-                    loadSessions();
-                } catch (err) {
-                    P.toast(err.message);
-                    done();
-                }
+        P.$all('[data-del]', box).forEach(function (b) {
+            b.addEventListener('click', async function () {
+                await P.api('DELETE', '/api/portal/searches/' + encodeURIComponent(b.getAttribute('data-del'))).catch(function () {});
+                loadRecent();
             });
         });
     }
+    P.$('#recent-clear').addEventListener('click', async function () {
+        var ok = await P.confirm('Your recent searches will be removed from this list.', { title: 'Clear recent searches?', confirmLabel: 'Clear' });
+        if (!ok) return;
+        await P.api('DELETE', '/api/portal/searches').catch(function (err) { P.toast(err.message); });
+        loadRecent();
+    });
 
-    P.shell('browse').then(function (me) {
-        if (!me.user) return;
+    P.shell('browse', { public: true }).then(function (me) {
+        if (me.portal.title) P.$('#start-title').textContent = me.portal.title;
+        serverSearch = me.portal.searchServer !== false;
+        if (!me.user) return; // signed out: search box only; searching asks to sign in
+        signedIn = true;
+        // the proxy chip goes into the top bar, right side
+        var slot = P.$('.topbar .page-actions');
+        slot.appendChild(P.$('#conn-template').content.cloneNode(true));
+        P.popover(P.$('#conn-chip'), P.$('#conn-panel'));
         if (me.portal.notice) {
             P.$('#notice').textContent = me.portal.notice;
             P.$('#notice').classList.remove('hidden');
         }
-        serverSearch = me.portal.searchServer !== false;
-        P.$('#start-title').textContent = me.portal.title || 'Web Portal';
-        return Promise.all([loadPools(me.portal), loadSites(), loadSessions()]);
+        return Promise.all([loadPools(me.portal), loadSites(), loadRecent()]).then(function () {
+            // back from signing in with a pending search/address (/?q=...): run it
+            var pending = new URLSearchParams(location.search).get('q');
+            if (pending) {
+                history.replaceState(null, '', '/');
+                P.$('#url').value = pending;
+                P.$('#go-form').requestSubmit();
+            }
+        });
     }).catch(function (err) { P.showError(goError, err.message); });
 })();

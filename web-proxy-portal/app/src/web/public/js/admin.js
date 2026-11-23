@@ -391,7 +391,7 @@
         admin_proxy_enabled: 'Proxy enabled', admin_proxy_disabled: 'Proxy disabled', admin_proxy_removed: 'Proxy removed',
         admin_site_created: 'Site created', admin_site_updated: 'Site updated', admin_site_deleted: 'Site deleted',
         admin_script_created: 'Script created', admin_script_updated: 'Script updated', admin_script_deleted: 'Script deleted',
-        toolbar_enabled: 'Toolbar turned on', toolbar_disabled: 'Toolbar turned off',
+        search_failed: 'Search failed', toolbar_enabled: 'Toolbar turned on', toolbar_disabled: 'Toolbar turned off',
         session_proxy_changed: 'Session proxy changed', admin_session_proxy_changed: 'Session proxy changed by admin',
         admin_error_resolved: 'Error resolved', admin_error_reopened: 'Error reopened', admin_error_group_resolved: 'Similar errors resolved',
         user_proxies_checked: 'Own proxies checked', user_proxy_enabled: 'Own proxy enabled', user_proxy_disabled: 'Own proxy disabled', user_proxy_removed: 'Own proxy removed',

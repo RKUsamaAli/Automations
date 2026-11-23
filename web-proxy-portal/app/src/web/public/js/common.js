@@ -77,6 +77,9 @@
         check: '<path d="M5 12l5 5 9-10"/>',
         clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
         plus: '<path d="M12 5v14M5 12h14"/>',
+        sessions: '<rect x="3" y="4" width="18" height="14" rx="2"/><path d="M3 8h18M7 21h10"/>',
+        chevron: '<path d="M6 9l6 6 6-6"/>',
+        signin: '<path d="M15 3h4a2 2 0 012 2v14a2 2 0 01-2 2h-4M10 17l5-5-5-5M15 12H3"/>',
         search: '<circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/>',
         empty: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 10h18"/>'
     };
@@ -274,6 +277,7 @@
         if (!res.ok) {
             var err = new Error((data && data.error) || ('Request failed (' + res.status + ')'));
             err.reason = data && data.reason;
+            err.detail = data && data.detail;
             err.status = res.status;
             err.reported = true;
             if (data && data.ref) {
@@ -406,50 +410,93 @@
     }
 
     /**
-     * Renders the user app chrome: top bar (product, sections, user, sign out)
-     * and, on phones, a bottom tab bar. active: 'browse' | 'proxies' | 'account'
+     * Renders the app chrome: a slim top bar with the product name on the left
+     * and, on the right, page actions (e.g. the Browse page's proxy chip), an
+     * Admin button for admins and the account menu (Browse, Sessions, My
+     * proxies, Account, Admin, theme, Sign out). Signed out (opts.public):
+     * theme + "Sign in" instead.
+     *   active: 'browse' | 'search' | 'sessions' | 'proxies' | 'account'
+     *   opts.public: the page also works signed out (no redirect to sign-in)
      */
-    async function shell(active) {
+    async function shell(active, opts) {
+        opts = opts || {};
         var info = await loadMe();
-        if (!info.user) { location.href = '/login'; return info; }
+        if (!info.user && !opts.public) { location.href = '/login?next=' + encodeURIComponent(location.pathname + location.search); return info; }
         var title = info.portal.title || 'Web Portal';
-        document.title = ({ browse: 'Browse', proxies: 'My proxies', account: 'Account' }[active] || title) + ' · ' + title;
-        var items = [{ id: 'browse', href: '/', label: 'Browse', icon: 'browse' }];
-        if (info.portal.userProxies) items.push({ id: 'proxies', href: '/proxies', label: 'My proxies', icon: 'proxies' });
-        items.push({ id: 'account', href: '/account', label: 'Account', icon: 'account' });
-        if (info.user.role === 'admin') items.push({ id: 'admin', href: '/admin', label: 'Admin', icon: 'admin' });
-        var links = items.map(function (i) {
-            return '<a href="' + i.href + '"' + (i.id === active ? ' class="active" aria-current="page"' : '') + '>' + icon(i.icon, 'icon') + '<span>' + esc(i.label) + '</span></a>';
-        }).join('');
+        document.title = ({ browse: title, search: 'Search', sessions: 'Sessions', proxies: 'My proxies', account: 'Account' }[active] || title) + (active === 'browse' ? '' : ' · ' + title);
         var skip = document.createElement('a');
         skip.className = 'skip-link';
         skip.href = '#main';
         skip.textContent = 'Skip to content';
         var header = document.createElement('header');
-        header.className = 'topbar';
-        header.innerHTML = '<a class="brand" href="/"><span class="brand-mark">' + icon('logo', '') + '</span><span>' + esc(title) + '</span></a>' +
-            '<nav class="topnav" aria-label="Main">' + links + '</nav>' +
-            '<div class="user-menu"><span class="avatar" aria-hidden="true">' + esc(info.user.username.charAt(0)) + '</span>' +
-            '<span class="hide-sm">' + esc(info.user.username) + '</span>' +
-            '<button type="button" class="ghost small" id="shell-logout">' + icon('logout', 'icon') + '<span>Sign out</span></button></div>';
+        header.className = 'topbar slim';
+        var right;
+        if (!info.user) {
+            right = '<div class="top-actions"><span class="theme-slot"></span>' +
+                (info.portal.registration && info.portal.registration !== 'closed' ? '<a class="btn ghost small hide-sm" href="/register">Create account</a>' : '') +
+                '<a class="btn primary small" href="/login?next=' + encodeURIComponent(location.pathname + location.search) + '">' + icon('signin', 'icon') + '<span>Sign in</span></a></div>';
+        } else {
+            var items = [{ id: 'browse', href: '/', label: 'Search', icon: 'search' }, { id: 'sessions', href: '/sessions', label: 'Sessions', icon: 'sessions' }];
+            if (info.portal.userProxies) items.push({ id: 'proxies', href: '/proxies', label: 'My proxies', icon: 'proxies' });
+            items.push({ id: 'account', href: '/account', label: 'Account', icon: 'account' });
+            if (info.user.role === 'admin') items.push({ id: 'admin', href: '/admin', label: 'Admin', icon: 'admin' });
+            var menuItems = items.map(function (i) {
+                return '<a role="menuitem" href="' + i.href + '"' + (i.id === active ? ' aria-current="page"' : '') + '>' + icon(i.icon, 'icon') + '<span>' + esc(i.label) + '</span></a>';
+            }).join('');
+            right = '<div class="top-actions"><span class="page-actions"></span>' +
+                (info.user.role === 'admin' ? '<a class="btn ghost small top-admin" href="/admin">' + icon('admin', 'icon') + '<span>Admin</span></a>' : '') +
+                '<div class="user-menu menu-wrap"><button type="button" class="menu-button" id="account-button" aria-haspopup="menu" aria-expanded="false" aria-controls="account-menu" aria-label="Account menu for ' + esc(info.user.username) + '">' +
+                '<span class="avatar" aria-hidden="true">' + esc(info.user.username.charAt(0)) + '</span><span class="hide-sm">' + esc(info.user.username) + '</span>' + icon('chevron', 'icon chev') + '</button>' +
+                '<div class="menu" id="account-menu" role="menu" aria-label="Account" hidden>' +
+                '<div class="menu-head"><strong>' + esc(info.user.username) + '</strong><span class="muted small">' + esc(info.user.role === 'admin' ? 'Administrator' : 'Signed in') + '</span></div>' +
+                menuItems + '<div class="menu-theme"><span class="muted small">Theme</span><span class="theme-slot"></span></div>' +
+                '<button type="button" role="menuitem" id="shell-logout">' + icon('logout', 'icon') + '<span>Sign out</span></button></div></div></div>';
+        }
+        header.innerHTML = '<a class="brand" href="/"><span class="brand-mark">' + icon('logo', '') + '</span><span>' + esc(title) + '</span></a>' + right;
         document.body.insertBefore(header, document.body.firstChild);
         document.body.insertBefore(skip, header);
         var main = document.querySelector('main');
         if (main) { main.id = 'main'; main.setAttribute('tabindex', '-1'); }
-        var bottom = document.createElement('nav');
-        bottom.className = 'bottomnav';
-        bottom.setAttribute('aria-label', 'Main');
-        bottom.innerHTML = links;
-        document.body.appendChild(bottom);
-        document.body.classList.add('has-bottomnav');
-        $('#shell-logout').addEventListener('click', function () { logout(false); });
-        if (window.PortalTheme) {
-            var slot = document.createElement('span');
-            slot.className = 'theme-slot';
-            $('.user-menu', header).insertBefore(slot, $('.user-menu', header).firstChild);
-            window.PortalTheme.mount(slot);
+        if (window.PortalTheme) $all('.theme-slot', header).forEach(function (slot) { window.PortalTheme.mount(slot); });
+        if (info.user) {
+            $('#shell-logout').addEventListener('click', function () { logout(false); });
+            popover($('#account-button'), $('#account-menu'));
         }
         return info;
+    }
+
+    /**
+     * Button + floating panel (menu or popover): click toggles, Escape and a
+     * click outside close it, focus returns to the button.
+     */
+    function popover(button, panel, onOpen) {
+        function close(focus) {
+            if (panel.hidden) return;
+            panel.hidden = true;
+            button.setAttribute('aria-expanded', 'false');
+            if (focus) button.focus();
+        }
+        function open() {
+            panel.hidden = false;
+            button.setAttribute('aria-expanded', 'true');
+            if (onOpen) onOpen();
+            var first = panel.querySelector('[role=menuitem], input:not([disabled]), select, button');
+            if (first) first.focus();
+        }
+        button.addEventListener('click', function () { if (panel.hidden) open(); else close(false); });
+        panel.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape') { e.stopPropagation(); close(true); }
+            if (panel.getAttribute('role') === 'menu' && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+                var items = [].slice.call(panel.querySelectorAll('[role=menuitem]'));
+                var i = items.indexOf(document.activeElement);
+                items[(i + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length].focus();
+                e.preventDefault();
+            }
+        });
+        document.addEventListener('pointerdown', function (e) {
+            if (!panel.hidden && !panel.contains(e.target) && !button.contains(e.target)) close(false);
+        });
+        return { open: open, close: close };
     }
 
     // ============================================================ suggest ==
@@ -619,6 +666,7 @@
     }
 
     window.Portal = {
+        popover: popover,
         api: api, esc: esc, $: $, $all: $all, toast: toast, showError: showError, busy: busy,
         formatBytes: formatBytes, timeAgo: timeAgo, formatDate: formatDate, colorFor: colorFor,
         confirm: confirmDialog, setupReveal: setupReveal, icon: icon, shell: shell, loadMe: loadMe, logout: logout,

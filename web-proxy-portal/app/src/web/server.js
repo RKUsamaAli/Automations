@@ -123,7 +123,8 @@ const page = (file) => (_req, res) => res.set('Cache-Control', 'no-store').type(
 app.get('/login', (req, res, next) => (req.user ? res.redirect('/') : page('login.html')(req, res, next)));
 app.get('/register', (req, res, next) => (req.user ? res.redirect('/') : page('register.html')(req, res, next)));
 app.get('/logout', (_req, res) => res.redirect('/account')); // signing out is a POST (CSRF-safe)
-app.get('/', requireUser, page('index.html'));
+app.get('/', page('index.html')); // start page: works signed out too (searching asks to sign in)
+app.get('/sessions', requireUser, page('sessions.html'));
 app.get('/search', requireUser, page('search.html'));
 app.get('/proxies', requireUser, page('proxies.html'));
 app.get('/account', requireUser, page('account.html'));

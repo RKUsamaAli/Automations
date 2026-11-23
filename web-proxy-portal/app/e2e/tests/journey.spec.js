@@ -24,11 +24,22 @@ async function backToPortal(page) {
     await page.locator('portal-toolbar').getByRole('button', { name: 'Back to portal' }).click();
 }
 
-/** Browse page: turn the proxy switch on and pick a pool by (part of) its name. */
+/** Start page: open the proxy chip (top right), turn the proxy on and pick a pool by (part of) its name. */
 async function useProxy(page, poolName) {
+    await page.locator('#conn-chip').click();
     await page.locator('#proxy-on').check();
     const value = await page.locator('#pool option', { hasText: poolName }).first().getAttribute('value');
     await page.locator('#pool').selectOption(String(value));
+    await page.locator('#conn-chip').click(); // close
+    await expect(page.locator('#conn-panel')).toBeHidden();
+}
+
+/** Account menu (top right): Search, Sessions, My proxies, Account, Admin, theme, Sign out. */
+async function openMenu(page) {
+    await page.getByRole('button', { name: /^Account menu/ }).click();
+    const menu = page.getByRole('menu', { name: 'Account' });
+    await expect(menu).toBeVisible();
+    return menu;
 }
 
 test.describe.serial('full product journey', () => {
@@ -170,7 +181,14 @@ test.describe.serial('full product journey', () => {
         await expect(phone.locator('.user-menu')).toContainText(user.name);
         // by default the portal uses the server's own connection (no proxy)
         await expect(phone.locator('#proxy-on')).not.toBeChecked();
-        await expect(phone.locator('#conn-line')).toContainText('No proxy');
+        await expect(phone.locator('#conn-chip')).toContainText('No proxy');
+        // the menu holds the other pages
+        const menu = await openMenu(phone);
+        for (const item of ['Search', 'Sessions', 'My proxies', 'Account', 'Sign out']) await expect(menu.getByRole('menuitem', { name: item })).toBeVisible();
+        await expect(menu.getByRole('menuitem', { name: 'Admin' })).toHaveCount(0); // not an admin
+        await shot(phone, '10a-account-menu-iphone', { fullPage: false });
+        await phone.keyboard.press('Escape');
+        await expect(menu).toBeHidden();
         const options = await phone.locator('#pool option').allTextContents();
         expect(options.join('|')).toContain(pools.shared);
         expect(options.join('|')).toContain(pools.assigned);
@@ -191,7 +209,7 @@ test.describe.serial('full product journey', () => {
 
     test('tapping the site opens it THROUGH the admin proxy, with the injected script', async () => {
         await useProxy(phone, pools.shared);
-        await expect(phone.locator('#conn-line')).toContainText(pools.shared);
+        await expect(phone.locator('#conn-chip')).toContainText(pools.shared);
         await phone.getByRole('button', { name: new RegExp(siteName) }).click();
         await expect(phone.locator('#shop-title')).toHaveText('Fresh picks today');
         proxiedUrl = phone.url();
@@ -216,6 +234,8 @@ test.describe.serial('full product journey', () => {
     test('Portal button returns to the portal; session is listed and can be resumed', async () => {
         await backToPortal(phone);
         await expect(phone).toHaveURL(S.appUrl + '/');
+        await (await openMenu(phone)).getByRole('menuitem', { name: 'Sessions' }).click();
+        await expect(phone).toHaveURL(S.appUrl + '/sessions');
         const session = phone.locator('#sessions li', { hasText: 'shop.localtest' });
         await expect(session).toBeVisible();
         await shot(phone, '13-sessions-iphone');
@@ -248,14 +268,13 @@ test.describe.serial('full product journey', () => {
         await phone.goto(S.appUrl + '/');
         // typing an address still opens the site directly
         await phone.locator('#url').fill('http://shop.localtest/login'); // typed addresses default to https; the fake shop is http only
-        await phone.locator('#url').press('Escape');
         await phone.locator('#go').click();
         await expect(phone.locator('#shop-login')).toBeVisible();
         await phone.goto(S.appUrl + '/');
     });
 
     test('user adds their own proxy and it becomes Online', async () => {
-        await phone.getByRole('link', { name: 'My proxies' }).first().click();
+        await (await openMenu(phone)).getByRole('menuitem', { name: 'My proxies' }).click();
         await expect(phone.getByRole('heading', { name: 'My proxies', level: 1 })).toBeVisible();
         await phone.locator('#text').fill(`${S.upstreams.user}\n127.0.0.1:1:bad:entry`);
         await phone.getByRole('button', { name: 'Add proxies' }).click();
@@ -271,11 +290,10 @@ test.describe.serial('full product journey', () => {
     });
 
     test('browsing through "My proxies" really uses the user\'s own proxy', async () => {
-        await phone.getByRole('link', { name: 'Browse' }).first().click();
+        await (await openMenu(phone)).getByRole('menuitem', { name: 'Search' }).click();
         await useProxy(phone, 'My proxies');
         await expect(phone.locator('#pool-health')).toHaveText('1 of 1 online');
         await phone.locator('#url').fill('http://shop.localtest/'); // the fake shop is plain HTTP; without a scheme the portal assumes https://
-        await phone.locator('#url').press('Escape');
         await phone.getByRole('button', { name: 'Go', exact: true }).click();
         await expect(phone.locator('#shop-title')).toBeVisible();
         await expect(phone.locator('#via-name')).toHaveText('Your own proxy');
@@ -354,11 +372,19 @@ test.describe.serial('full product journey', () => {
         await admin.locator('#set-search_engine').selectOption('custom');
         await admin.locator('#save-settings').click();
         await expect(admin.getByText('Settings saved')).toBeVisible();
+        // the start page lists recent searches under the search box
         await phone.goto(S.appUrl + '/');
+        const recent = phone.getByRole('region', { name: 'Recent searches' });
+        await expect(recent).toContainText('lemons');
+        await expect(recent).toContainText('fresh berries');
+        await shot(phone, '10e-start-page-recent-iphone', { fullPage: false });
+        await recent.getByRole('button', { name: 'Remove fresh berries from recent searches' }).click();
+        await expect(recent).not.toContainText('fresh berries');
+        await phone.goto(S.appUrl + '/sessions');
     });
 
     test('a session shows its proxy and can be switched to another one', async () => {
-        await expect(phone).toHaveURL(S.appUrl + '/');
+        await expect(phone).toHaveURL(S.appUrl + '/sessions');
         // the session the toolbar moved to the shared pool shows that proxy (127.0.0.1:<port> in the test setup)
         const ownFirst = phone.locator('#sessions li').filter({ has: phone.locator('.via-line', { hasText: pools.shared }) }).first();
         await expect(ownFirst).toBeVisible();
@@ -386,6 +412,7 @@ test.describe.serial('full product journey', () => {
 
     // ------------------------------------------------------------ cleanup --
     test('ending a session kills its link', async () => {
+        await phone.goto(S.appUrl + '/sessions');
         await expect(phone.locator('#sessions li').first()).toBeVisible();
         const before = await phone.locator('#sessions li').count(); // site tile, own proxy, search, typed address
         expect(before).toBeGreaterThanOrEqual(2);
@@ -510,7 +537,6 @@ test.describe.serial('full product journey', () => {
     test('a page that fails shows a friendly error with a reference; the admin finds it with the steps', async () => {
         await phone.goto(S.appUrl + '/');
         await phone.locator('#url').fill('http://broken.localtest/checkout');
-        await phone.locator('#url').press('Escape');
         await phone.getByRole('button', { name: 'Go', exact: true }).click();
         await expect(phone.getByRole('heading', { name: "This page couldn't load" })).toBeVisible({ timeout: 20000 });
         const ref = await phone.locator('.ref code').textContent();
@@ -541,10 +567,19 @@ test.describe.serial('full product journey', () => {
 
     test('signing out also locks the proxy: an open proxied link goes to sign-in', async () => {
         await phone.goto(S.appUrl + '/account');
-        await phone.getByRole('button', { name: 'Sign out', exact: true }).last().click();
+        await (await openMenu(phone)).getByRole('menuitem', { name: 'Sign out' }).click();
         await expect(phone).toHaveURL(/\/login\?signedout=1/);
         await expect(phone.getByText('You have been signed out.')).toBeVisible();
         await shot(phone, '21-signed-out-iphone');
+        // signed out, the start page still shows the search box, with "Sign in" at the top right
+        await phone.goto(S.appUrl + '/');
+        await expect(phone.locator('#url')).toBeVisible();
+        await expect(phone.getByRole('link', { name: 'Sign in' })).toBeVisible();
+        await expect(phone.locator('#conn-chip')).toHaveCount(0);
+        await shot(phone, '21b-start-signed-out-iphone', { fullPage: false });
+        await phone.locator('#url').fill('weather');
+        await phone.locator('#url').press('Enter');
+        await expect(phone).toHaveURL(/\/login\?next=%2F%3Fq%3Dweather/); // searching asks to sign in first, then continues
         await phone.goto(ownProxyUrl); // the still-active session from the previous step
         await expect(phone).toHaveURL(new RegExp('^' + S.appUrl.replace(/[.]/g, '\\.') + '/login'));
     });
@@ -552,14 +587,15 @@ test.describe.serial('full product journey', () => {
     test('dark mode: System / Light / Dark switch', async () => {
         await login(phone, user.name, user.pass); // the previous step signed out
         await expect(phone).toHaveURL(S.appUrl + '/');
-        // phone: one button showing the current mode; each tap cycles System -> Light -> Dark
-        await expect(phone.getByRole('button', { name: 'Light theme' })).toBeHidden();
-        await phone.getByRole('button', { name: 'System theme' }).click();
+        // the theme switch is in the account menu
+        let menu = await openMenu(phone);
+        await menu.getByRole('button', { name: 'Light theme' }).click();
         await expect(phone.locator('html')).toHaveAttribute('data-theme', 'light');
-        await phone.getByRole('button', { name: 'Light theme' }).click();
+        await menu.getByRole('button', { name: 'Dark theme' }).click();
         await expect(phone.locator('html')).toHaveAttribute('data-theme', 'dark');
-        await expect(phone.getByRole('button', { name: 'Dark theme' })).toHaveAttribute('aria-pressed', 'true');
+        await expect(menu.getByRole('button', { name: 'Dark theme' })).toHaveAttribute('aria-pressed', 'true');
         await shot(phone, '23-browse-dark-iphone', { fullPage: false });
+        await phone.keyboard.press('Escape');
         await phone.reload();
         await expect(phone.locator('html')).toHaveAttribute('data-theme', 'dark'); // remembered, applied before paint
         await admin.getByRole('button', { name: 'Dark theme' }).click();
@@ -568,12 +604,14 @@ test.describe.serial('full product journey', () => {
         await shot(admin, '24-admin-dashboard-dark', { fullPage: false });
         await admin.getByRole('button', { name: 'System theme' }).click();
         await expect(admin.locator('html')).not.toHaveAttribute('data-theme', /./);
-        await phone.getByRole('button', { name: 'Dark theme' }).click(); // dark -> system
+        menu = await openMenu(phone);
+        await menu.getByRole('button', { name: 'System theme' }).click();
         await expect(phone.locator('html')).not.toHaveAttribute('data-theme', /./);
+        await phone.keyboard.press('Escape');
     });
 
     test('expired sign-in: password prompt over the page, then it simply continues', async () => {
-        await phone.goto(S.appUrl + '/');
+        await phone.goto(S.appUrl + '/sessions');
         await expect(phone.locator('#sessions')).toBeVisible();
         // The 5-minute access token runs out: the page renews it silently.
         await phone.context().clearCookies({ name: 'pp_at' });
@@ -584,6 +622,8 @@ test.describe.serial('full product journey', () => {
         await expect.poll(async () => (await phone.context().cookies()).some((c) => c.name === 'pp_at'), { message: 'new access token' }).toBe(true);
         // The 24-hour identity token runs out (simulated): the prompt appears over the page.
         await phone.route('**/api/auth/refresh', (route) => route.fulfill({ status: 401, contentType: 'application/json', body: JSON.stringify({ error: 'Your sign-in has expired', code: 'identity_expired', username: user.name }) }), { times: 1 });
+        await phone.goto(S.appUrl + '/');
+        await expect(phone.locator('#conn-chip')).toBeVisible();
         await phone.context().clearCookies({ name: 'pp_at' });
         // typing asks for suggestions -> the API call finds the sign-in expired -> prompt
         await phone.locator('#url').fill('typed before the prompt');
@@ -598,9 +638,9 @@ test.describe.serial('full product journey', () => {
         await prompt.getByRole('button', { name: 'Continue' }).click();
         await expect(prompt).toBeHidden();
         await expect(phone.locator('#url')).toHaveValue('typed before the prompt'); // nothing lost
-        await expect(phone.locator('#sessions li').first()).toBeVisible();
         await phone.locator('#url').fill('');
-        await phone.locator('#shell-logout').click(); // the next step starts signed out
+        await phone.locator('#url').press('Escape');
+        await (await openMenu(phone)).getByRole('menuitem', { name: 'Sign out' }).click(); // the next step starts signed out
         await expect(phone).toHaveURL(/signedout/);
     });
 
@@ -613,7 +653,7 @@ test.describe.serial('full product journey', () => {
         await phone.getByRole('button', { name: 'Update password' }).click();
         await expect(phone.getByText('Password updated.')).toBeVisible();
         await shot(phone, '22-account-iphone');
-        await phone.locator('#shell-logout').click();
+        await (await openMenu(phone)).getByRole('menuitem', { name: 'Sign out' }).click();
         await expect(phone).toHaveURL(/signedout/);
         await login(phone, user.name, user.pass);
         await expect(phone.getByRole('alert')).toHaveText('Invalid username or password');

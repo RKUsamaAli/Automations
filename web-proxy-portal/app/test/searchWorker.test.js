@@ -16,6 +16,9 @@ const GOOGLE_HTML = (q) => `<!doctype html><html><body><div id="search"><div id=
 </div></div></body></html>`;
 const DDG_HTML = `<!doctype html><html><body><div class="result"><a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fduck.example.net%2Fpage">Duck result</a><a class="result__snippet">Duck snippet</a></div></body></html>`;
 
+const BING_HTML = `<!doctype html><html><body><ol id="b_results"><li class="b_algo"><h2><a href="https://www.bing.com/ck/a?!&&p=x&u=a1aHR0cHM6Ly9iaW5nLmV4YW1wbGUuY29tL3BhZ2U&ntb=1">Bing result</a></h2><div class="b_caption"><p>Bing snippet</p></div></li></ol></body></html>`;
+let ua = '';
+
 let server;
 let port;
 let chromiumOk = true;
@@ -28,6 +31,8 @@ try {
 test.before(async () => {
     server = http.createServer((req, res) => {
         const u = new URL(req.url, 'http://x');
+        if (u.pathname === '/search') ua = req.headers['user-agent'] || '';
+        if (u.searchParams.get('q') === 'all blocked' && u.pathname !== '/bing') return req.socket.destroy();
         if (u.pathname === '/search' && u.searchParams.get('q') === 'robot check') {
             res.writeHead(302, { location: '/sorry/index?continue=x' });
             return res.end();
@@ -36,12 +41,14 @@ test.before(async () => {
         if (u.pathname === '/search') return res.end(GOOGLE_HTML(u.searchParams.get('q')));
         if (u.pathname.startsWith('/sorry')) return res.end('<html><body><form id="captcha-form" action="index">captcha</form></body></html>');
         if (u.pathname === '/ddg') return res.end(DDG_HTML);
+        if (u.pathname === '/bing') return res.end(u.searchParams.get('q') === 'nothing anywhere' ? '<html></html>' : BING_HTML);
         res.end('');
     });
     await new Promise((r) => server.listen(0, '127.0.0.1', r));
     port = server.address().port;
     process.env.GOOGLE_SEARCH_URL = `http://127.0.0.1:${port}/search?q={q}`;
     process.env.DDG_SEARCH_URL = `http://127.0.0.1:${port}/ddg?q={q}`;
+    process.env.BING_SEARCH_URL = `http://127.0.0.1:${port}/bing?q={q}`;
     require('./helpers');
 });
 test.after(async () => {
@@ -63,6 +70,15 @@ test('Google results from the page; /url?q= unwrapped; Google-internal links ski
     assert.equal(r.results[0].title, 'Result A for pizza');
     assert.equal(r.results[0].snippet, 'Snippet A text');
     assert.equal(r.results[1].displayUrl, 'shop.example.com');
+    assert.doesNotMatch(ua, /Headless/); // sites block HeadlessChrome
+});
+
+test('Google and DuckDuckGo fail -> Bing results (link unwrapped) with a note', { skip: !chromiumOk && 'no Chromium installed' }, async () => {
+    const { run } = require('../src/search/worker');
+    const r = await run({ q: 'all blocked', proxy: null, lang: 'en' });
+    assert.equal(r.engine, 'bing');
+    assert.deepEqual(r.results.map((x) => x.url), ['https://bing.example.com/page']);
+    assert.match(r.note, /Google did not answer.*DuckDuckGo did not answer/);
 });
 
 test('CAPTCHA from Google -> DuckDuckGo results with a note', { skip: !chromiumOk && 'no Chromium installed' }, async () => {

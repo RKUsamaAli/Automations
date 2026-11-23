@@ -89,4 +89,33 @@ function extractDuckDuckGo() {
     return out;
 }
 
-module.exports = { extractGoogle, classifyGoogle, extractDuckDuckGo };
+/** Bing (www.bing.com/search). Result links may be bing.com/ck/a?...&u=a1<base64url target>. */
+function extractBing() {
+    const out = [];
+    const seen = new Set();
+    for (const a of document.querySelectorAll('#b_results li.b_algo h2 a')) {
+        let url = a.href;
+        try {
+            const u = new URL(url);
+            const enc = u.hostname.endsWith('bing.com') && u.pathname.startsWith('/ck/') ? u.searchParams.get('u') : null;
+            if (enc && enc.startsWith('a1')) url = atob(enc.slice(2).replace(/-/g, '+').replace(/_/g, '/'));
+        } catch (_) {
+            continue;
+        }
+        if (!/^https?:/i.test(url) || seen.has(url)) continue;
+        seen.add(url);
+        let host = '';
+        try {
+            host = new URL(url).hostname.replace(/^www\./, '');
+        } catch (_) {
+            continue;
+        }
+        const li = a.closest('li.b_algo');
+        const sn = li && li.querySelector('.b_caption p, p');
+        out.push({ title: a.innerText.trim().slice(0, 200), url, displayUrl: host, snippet: sn ? sn.innerText.replace(/\s+/g, ' ').trim().slice(0, 300) : '' });
+        if (out.length >= 15) break;
+    }
+    return out;
+}
+
+module.exports = { extractGoogle, classifyGoogle, extractDuckDuckGo, extractBing };

@@ -51,7 +51,7 @@
         } catch (err) {
             box.innerHTML = '';
             P.$('#meta').textContent = '';
-            P.showError(P.$('#error'), err.message);
+            P.showError(P.$('#error'), err.message + (err.detail ? ' Reason (shown to admins): ' + err.detail : ''));
         }
     }
 
@@ -63,5 +63,5 @@
         location.href = '/search?q=' + encodeURIComponent(v) + '&via=' + encodeURIComponent(via);
     });
 
-    P.shell('browse').then(function (me) { if (me.user) run(); });
+    P.shell('search').then(function (me) { if (me.user) run(); });
 })();

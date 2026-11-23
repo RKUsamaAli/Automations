@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="robots" content="noindex">
+    <title>Sessions</title>
+    <meta name="theme-color" content="#f6f7f9">
+    <script src="/assets/js/theme.js"></script>
+    <link rel="stylesheet" href="/assets/css/app.css">
+</head>
+<body>
+<main class="container">
+    <div class="page-head">
+        <div class="titles">
+            <h1>Sessions <span class="muted" id="session-count"></span></h1>
+            <p>Websites you opened through the portal. Resume one to continue where you left off (logins are kept), change the proxy it goes out through, or end it.</p>
+        </div>
+        <button type="button" class="small" id="refresh">Refresh</button>
+    </div>
+    <div id="go-error" class="alert error hidden" role="alert"></div>
+    <section class="panel"><ul class="rows" id="sessions"></ul></section>
+</main>
+<script src="/assets/js/common.js"></script>
+<script src="/assets/js/sessions.js"></script>
+</body>
+</html>

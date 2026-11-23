@@ -52,11 +52,15 @@ test('health endpoint is public', async () => {
     assert.equal(r.json.ok, true);
 });
 
-test('pages redirect to login when signed out; security headers present', async () => {
+test('signed out: start page is public, other pages redirect to login; security headers present', async () => {
     const c = client();
-    const r = await c.req('GET', '/');
-    assert.equal(r.status, 302);
-    assert.match(r.headers.get('location'), /^\/login/);
+    const home = await c.req('GET', '/');
+    assert.equal(home.status, 200); // search box + "Sign in"
+    for (const path of ['/sessions', '/search?q=x', '/proxies', '/account']) {
+        const r = await c.req('GET', path);
+        assert.equal(r.status, 302, path);
+        assert.match(r.headers.get('location'), /^\/login\?next=/);
+    }
     const login = await c.req('GET', '/login');
     assert.equal(login.status, 200);
     assert.match(login.headers.get('content-security-policy'), /frame-ancestors 'none'/);
@@ -563,4 +567,24 @@ test('preferences: the floating toolbar can be turned off and on per user', asyn
     assert.equal((await c.req('GET', '/api/auth/me')).json.user.toolbarEnabled, false);
     assert.equal((await c.req('PUT', '/api/portal/preferences', { toolbarEnabled: 'no' })).status, 400);
     await c.req('PUT', '/api/portal/preferences', { toolbarEnabled: true });
+});
+
+test('recent searches: recorded once per query (newest first), removable, clearable, private per user', async () => {
+    const history = require('../src/services/searchHistory');
+    const users = require('../src/services/users');
+    const u = users.getByUsername ? users.getByUsername('user1') : null;
+    const id = u ? u.id : require('../src/db').get().prepare("SELECT id FROM users WHERE username = 'user1'").get().id;
+    history.clear(id);
+    history.record(id, 'weather madrid');
+    history.record(id, 'pizza near me');
+    history.record(id, 'Weather  Madrid'); // same query again -> moves to the top, counted
+    let list = history.list(id);
+    assert.deepEqual(list.map((x) => x.query), ['Weather Madrid', 'pizza near me']);
+    assert.equal(list[0].count, 2);
+    assert.deepEqual(history.list(id, { q: 'piz' }).map((x) => x.query), ['pizza near me']);
+    assert.equal(history.remove('someone-else', list[1].id), false);
+    assert.equal(history.remove(id, list[1].id), true);
+    assert.equal(history.clear(id), 1);
+    list = history.list(id);
+    assert.equal(list.length, 0);
 });
