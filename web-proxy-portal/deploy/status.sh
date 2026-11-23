@@ -26,7 +26,7 @@ echo
 echo "${C_BOLD}Health${C_RESET}"
 web_port="$(app_env WEB_PORT 3000)"
 proxy_port="$(app_env PROXY_PORT 8080)"
-for svc in "portal-web|http://127.0.0.1:${web_port}/healthz" "portal-proxy|http://127.0.0.1:${proxy_port}/__portal/healthz"; do
+for svc in "portal-web|http://127.0.0.1:${web_port}/healthz" "portal-proxy|http://127.0.0.1:${proxy_port}/__portal/healthz" "portal-live|http://127.0.0.1:$(app_env LIVE_PORT 3004)/healthz" "portal-search|http://127.0.0.1:$(app_env SEARCH_PORT 3003)/healthz"; do
     name="${svc%%|*}"; url="${svc#*|}"
     if body="$(curl -fsS --max-time 3 "$url" 2>/dev/null)"; then
         ok "$name  $body"
