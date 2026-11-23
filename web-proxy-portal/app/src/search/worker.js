@@ -95,6 +95,9 @@ function proxyOption(p) {
     return { server: `${p.protocol === 'socks5' ? 'socks5' : 'http'}://${p.host}:${p.port}`, username: p.username || undefined, password: p.password || undefined };
 }
 
+/** Never show a result without a title: use the site name. */
+const tidy = (list) => (list || []).filter((r) => r && r.url).map((r) => ({ ...r, title: r.title || r.displayUrl || r.url }));
+
 async function run({ q, proxy, lang }) {
     const started = Date.now();
     const hl = /^[a-z]{2}(-[A-Z]{2})?$/.test(lang || '') ? lang : 'en';
@@ -126,7 +129,7 @@ async function run({ q, proxy, lang }) {
             await page.goto(fill(GOOGLE_URL(), q, hl), { waitUntil: 'domcontentloaded' });
             await page.waitForSelector('#search, #rso, #captcha-form, form[action*="sorry"], form[action*="consent"]', { timeout: Math.min(8000, TIMEOUT_MS) }).catch(() => {});
             kind = await page.evaluate(classifyGoogle);
-            if (kind === 'results') results = await page.evaluate(extractGoogle);
+            if (kind === 'results') results = tidy(await page.evaluate(extractGoogle));
         } catch (e) {
             googleError = e.message;
         }
@@ -148,7 +151,7 @@ async function run({ q, proxy, lang }) {
                 const tab = await ctx.newPage();
                 tab.setDefaultTimeout(TIMEOUT_MS);
                 await tab.goto(fill(url(), q, hl), { waitUntil: 'domcontentloaded' });
-                results = await tab.evaluate(extract);
+                results = tidy(await tab.evaluate(extract));
                 if (results.length) {
                     const name = engine === 'bing' ? 'Bing' : 'DuckDuckGo';
                     return { engine, results, blocked: kind === 'captcha' ? 'captcha' : kind, note: `${tried.join('; ')}, so these results come from ${name}.`, ms: Date.now() - started };

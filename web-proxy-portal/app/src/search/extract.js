@@ -10,6 +10,8 @@
 
 /* eslint-disable no-undef */
 function extractGoogle() {
+    // innerText is empty for text the page hides with CSS (Bing does until its scripts run): fall back to textContent
+    const txt = (el) => (el ? (el.innerText || '').trim() || el.textContent || '' : '').replace(/\s+/g, ' ').trim();
     const out = [];
     const seen = new Set();
     const scope = document.querySelector('#search') || document.querySelector('#rso') || document.body;
@@ -39,10 +41,10 @@ function extractGoogle() {
         const box = a.closest('[data-hveid], .g, .MjjYud, [data-sokoban-container]') || a.parentElement;
         let snippet = '';
         const hint = box && box.querySelector('[data-sncf], .VwiC3b, [style*="line-clamp"], [data-content-feature]');
-        if (hint) snippet = hint.innerText;
-        else if (box) snippet = box.innerText.replace(h3.innerText, '');
+        if (hint) snippet = txt(hint);
+        else if (box) snippet = txt(box).replace(txt(h3), '');
         out.push({
-            title: h3.innerText.trim().slice(0, 200),
+            title: txt(h3).slice(0, 200),
             url,
             displayUrl: host.replace(/^www\./, ''),
             snippet: snippet.replace(/\s+/g, ' ').trim().slice(0, 300)
@@ -63,6 +65,8 @@ function classifyGoogle() {
 
 /** DuckDuckGo HTML version (html.duckduckgo.com/html/). */
 function extractDuckDuckGo() {
+    // innerText is empty for text the page hides with CSS (Bing does until its scripts run): fall back to textContent
+    const txt = (el) => (el ? (el.innerText || '').trim() || el.textContent || '' : '').replace(/\s+/g, ' ').trim();
     const out = [];
     for (const r of document.querySelectorAll('.result')) {
         if (r.classList.contains('result--ad')) continue;
@@ -83,7 +87,7 @@ function extractDuckDuckGo() {
         } catch (_) {
             /* keep empty */
         }
-        out.push({ title: a.innerText.trim().slice(0, 200), url, displayUrl: host, snippet: sn ? sn.innerText.replace(/\s+/g, ' ').trim().slice(0, 300) : '' });
+        out.push({ title: txt(a).slice(0, 200), url, displayUrl: host, snippet: txt(sn).slice(0, 300) });
         if (out.length >= 15) break;
     }
     return out;
@@ -91,6 +95,8 @@ function extractDuckDuckGo() {
 
 /** Bing (www.bing.com/search). Result links may be bing.com/ck/a?...&u=a1<base64url target>. */
 function extractBing() {
+    // innerText is empty for text the page hides with CSS (Bing does until its scripts run): fall back to textContent
+    const txt = (el) => (el ? (el.innerText || '').trim() || el.textContent || '' : '').replace(/\s+/g, ' ').trim();
     const out = [];
     const seen = new Set();
     for (const a of document.querySelectorAll('#b_results li.b_algo h2 a')) {
@@ -112,7 +118,7 @@ function extractBing() {
         }
         const li = a.closest('li.b_algo');
         const sn = li && li.querySelector('.b_caption p, p');
-        out.push({ title: a.innerText.trim().slice(0, 200), url, displayUrl: host, snippet: sn ? sn.innerText.replace(/\s+/g, ' ').trim().slice(0, 300) : '' });
+        out.push({ title: txt(a).slice(0, 200), url, displayUrl: host, snippet: txt(sn).slice(0, 300) });
         if (out.length >= 15) break;
     }
     return out;
