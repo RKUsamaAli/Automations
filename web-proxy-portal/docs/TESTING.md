@@ -67,3 +67,11 @@ E2E_ADMIN_USER=e2eadmin E2E_ADMIN_PASS='Some-Password-1' npm run e2e
 ```
 
 Every run uses unique names, so it can be repeated against the same server.
+
+### Live browser in the browser tests
+
+The test server's `.env` maps the fake sites for the live browser:
+`LIVE_RESOLVE=shop.localtest=127.0.0.1:17001,broken.localtest=127.0.0.1:9`.
+If your machine sets `https_proxy` (corporate / sandbox proxies), unset it for
+the test run (`env -u https_proxy -u HTTPS_PROXY npx playwright test ...`):
+Chromium would otherwise send the live browser's WebSocket to that proxy.

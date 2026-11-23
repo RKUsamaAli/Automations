@@ -65,6 +65,29 @@ The session then stays on one proxy (sticky) until it ends. If that proxy dies a
 
 Changes apply within a few seconds without restarting anything.
 
+## Live browser (default)
+
+Admin → Settings → **How websites are opened**:
+
+- **Live browser** (default): every user gets their own real Chrome on the
+  server. The page `/live` shows its screen and sends clicks, typing, scrolling
+  and taps to it. Nothing in the website is rewritten, so sites that refuse web
+  proxies work normally: Cloudflare "Just a moment…" checks, Google (solve a
+  CAPTCHA yourself if one appears), banks and logins. Logins stay between visits
+  (each user has a private browser profile on the server).
+- **Web proxy**: the earlier mode (pages rewritten, proxies, injected scripts, top bar).
+
+Live browser notes:
+
+- Proxies are not used by the live browser yet: websites see the server's IP.
+- Each open browser needs ~250-400 MB RAM. `LIVE_MAX_BROWSERS` (default 2) users
+  can have one open at the same time; a browser nobody watched for
+  `LIVE_IDLE_MIN` (15) minutes is closed (its logins stay on disk).
+- The browser cannot reach the server itself or private networks (blocked).
+- Downloads and file uploads are turned off for now.
+- Check it: `curl -s 127.0.0.1:3004/healthz` on the server; logs in
+  `shared/logs/live.*.log`.
+
 ## Top bar on proxied pages
 
 Every page opened through the portal gets a thin bar at the top (users can

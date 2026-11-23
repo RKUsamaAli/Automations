@@ -174,9 +174,54 @@ test.describe.serial('full product journey', () => {
         await expect(admin.locator('tr', { hasText: pools.assigned }).getByText('1 assigned user')).toBeVisible();
     });
 
+    // --------------------------------------------------------- live browser --
+    test('live browser (default): a real Chrome on the server, shown in the page; sign in to a site with the keyboard', async () => {
+        // (a shared test server keeps the previous run's settings: make sure it is the default mode)
+        await admin.getByRole('button', { name: 'Settings' }).click();
+        await admin.locator('#set-browse_mode').selectOption('live');
+        await admin.locator('#save-settings').click();
+        await expect(admin.getByText('Settings saved')).toBeVisible();
+        await login(phone, user.name, user.pass);
+        await expect(phone).toHaveURL(S.appUrl + '/');
+        await expect(phone.locator('#conn-chip')).toHaveCount(0); // no proxies in live mode (yet)
+        await expect((await openMenu(phone)).getByRole('menuitem', { name: 'Browser' })).toBeVisible();
+        await phone.keyboard.press('Escape');
+        // an address on the start page opens in the live browser
+        await phone.locator('#url').fill('http://shop.localtest/login');
+        await phone.locator('#go').click();
+        await expect(phone).toHaveURL(S.appUrl + '/live');
+        await expect(phone.locator('#overlay')).toBeHidden({ timeout: 30000 }); // first screen frame drawn
+        await expect(phone.locator('#lb-url')).toHaveValue('http://shop.localtest/login');
+        await expect(phone).toHaveTitle(/Sign in - Demo Shop/);
+        await shot(phone, '26-live-browser-iphone', { fullPage: false });
+        // keyboard into the remote page: Tab to the username field, type, Tab, password, Enter
+        await phone.locator('#lb-kbd').click();
+        await phone.keyboard.press('Tab');
+        await phone.keyboard.type(user.name);
+        await phone.keyboard.press('Tab');
+        await phone.keyboard.type('shop-pass');
+        await phone.keyboard.press('Enter');
+        await expect(phone.locator('#lb-url')).toHaveValue('http://shop.localtest/account', { timeout: 15000 });
+        await expect(phone).toHaveTitle(/My account - Demo Shop/);
+        await shot(phone, '27-live-browser-signed-in-iphone', { fullPage: false });
+        // tapping on the page: "Continue shopping" sits under the welcome card; tap the shop header instead
+        // and reload - the site login stays (same server-side browser)
+        await phone.locator('#lb-reload').click();
+        await expect(phone).toHaveTitle(/My account - Demo Shop/);
+        // the admin sees it in the activity log
+        await admin.getByRole('button', { name: 'Activity log' }).click();
+        await expect(admin.locator('#view')).toContainText('Live browser started');
+        // the rest of the journey uses the web-proxy mode (proxies, injected scripts)
+        await admin.getByRole('button', { name: 'Settings' }).click();
+        await admin.locator('#set-browse_mode').selectOption('proxy');
+        await admin.locator('#save-settings').click();
+        await expect(admin.getByText('Settings saved')).toBeVisible();
+        await phone.waitForTimeout(3500); // settings cache in every process
+    });
+
     // -------------------------------------------------------------- browse --
     test('user signs in and sees the Browse screen with allowed pools', async () => {
-        await login(phone, user.name, user.pass);
+        await phone.goto(S.appUrl + '/');
         await expect(phone).toHaveURL(S.appUrl + '/');
         await expect(phone.locator('.user-menu')).toContainText(user.name);
         // by default the portal uses the server's own connection (no proxy)
@@ -555,7 +600,7 @@ test.describe.serial('full product journey', () => {
         const steps = admin.getByRole('list', { name: 'Steps before the error' });
         await expect(steps).toContainText('Session started');
         await expect(steps).toContainText('http://broken.localtest/checkout');
-        await expect(steps).toContainText('Signed in');
+        await expect(steps).toContainText('Session ended'); // the steps just before (the list keeps the last ~30)
         await expect(admin.locator('#modal')).toContainText(user.name);
         await shot(admin, '19c-admin-error-detail', { fullPage: false });
         await admin.getByRole('button', { name: 'Mark resolved' }).click();

@@ -149,6 +149,14 @@ if ! (cd "$RELEASE_DIR" && as_app env PLAYWRIGHT_BROWSERS_PATH="$BROWSERS_DIR" n
         || warn "Chromium install failed - Google results fall back to opening the search engine through the proxy"
 fi
 
+# Live browser (portal-live): a virtual screen so Chromium runs as a normal,
+# visible Chrome (sites trust it more than headless), plus fonts for every script.
+if ! command -v Xvfb >/dev/null 2>&1; then
+    log "Installing the virtual screen (Xvfb) and fonts for the live browser"
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xvfb fonts-liberation fonts-noto-core fonts-noto-color-emoji fonts-noto-cjk >/dev/null \
+        && ok "Xvfb + fonts installed" || warn "Xvfb install failed - the live browser runs headless"
+fi
+
 # ------------------------------------------------------ 3. rammerhead ---
 step "3/9 Rammerhead engine"
 # shellcheck disable=SC1090,SC1091

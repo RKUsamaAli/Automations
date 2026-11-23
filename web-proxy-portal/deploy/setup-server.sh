@@ -141,7 +141,8 @@ install_packages() {
     apt-get install -y --no-install-recommends \
         ca-certificates curl gnupg git build-essential python3 \
         nginx certbot ufw fail2ban unattended-upgrades \
-        sqlite3 jq logrotate rsync cron
+        sqlite3 jq logrotate rsync cron \
+        xvfb fonts-liberation fonts-noto-core fonts-noto-color-emoji fonts-noto-cjk
     ok "Packages installed"
 }
 

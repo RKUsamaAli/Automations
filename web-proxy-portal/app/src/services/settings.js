@@ -33,6 +33,7 @@ const DEFAULTS = {
     upstream_failover: true, // move a session to another proxy of the same pool if its proxy dies
 
     // --- Search (Browse page address bar) ---
+    browse_mode: 'live', // live = a real Chromium on the server shown in the page | proxy = web proxy (rewritten pages)
     search_engine: 'google', // google (results via the server's headless browser) | duckduckgo | bing | custom
     search_url_custom: '', // custom results page, {q} = the words, e.g. https://search.example/?q={q}
     search_suggest_url_custom: '', // optional, OpenSearch JSON ["q", ["a", "b"]], {q} = the words
@@ -47,6 +48,7 @@ const DEFAULTS = {
 const ENUMS = {
     registration_mode: ['open', 'approval', 'closed'],
     upstream_fallback: ['deny', 'direct'],
+    browse_mode: ['live', 'proxy'],
     search_engine: ['google', 'duckduckgo', 'bing', 'custom']
 };
 

@@ -391,7 +391,7 @@
         admin_proxy_enabled: 'Proxy enabled', admin_proxy_disabled: 'Proxy disabled', admin_proxy_removed: 'Proxy removed',
         admin_site_created: 'Site created', admin_site_updated: 'Site updated', admin_site_deleted: 'Site deleted',
         admin_script_created: 'Script created', admin_script_updated: 'Script updated', admin_script_deleted: 'Script deleted',
-        search_failed: 'Search failed', toolbar_enabled: 'Toolbar turned on', toolbar_disabled: 'Toolbar turned off',
+        search_failed: 'Search failed', live_browser_started: 'Live browser started', live_browser_closed: 'Live browser closed', search_history_cleared: 'Recent searches cleared', toolbar_enabled: 'Toolbar turned on', toolbar_disabled: 'Toolbar turned off',
         session_proxy_changed: 'Session proxy changed', admin_session_proxy_changed: 'Session proxy changed by admin',
         admin_error_resolved: 'Error resolved', admin_error_reopened: 'Error reopened', admin_error_group_resolved: 'Similar errors resolved',
         user_proxies_checked: 'Own proxies checked', user_proxy_enabled: 'Own proxy enabled', user_proxy_disabled: 'Own proxy disabled', user_proxy_removed: 'Own proxy removed',
@@ -1349,6 +1349,7 @@
                 { name: 'allowlist_strict', label: 'Also block images and scripts from other domains (may break sites using CDNs)', type: 'checkbox', value: s.allowlist_strict }
             ]],
             ['Search', [
+                { name: 'browse_mode', label: 'How websites are opened', type: 'select', value: s.browse_mode, options: [{ value: 'live', label: 'Live browser: a real Chrome on the server, shown in the page (recommended; works with Cloudflare, Google, logins)' }, { value: 'proxy', label: 'Web proxy: pages are rewritten and run in the user\'s browser (proxies, injected scripts)' }], hint: 'Live browser: each user gets their own Chrome on the server (LIVE_MAX_BROWSERS at the same time). Proxies are not used in this mode yet.' },
                 { name: 'search_engine', label: 'Search engine for the address bar', type: 'select', value: s.search_engine, options: [{ value: 'google', label: 'Google (results via the server\'s browser, recommended)' }, { value: 'duckduckgo', label: 'DuckDuckGo (opened through the proxy)' }, { value: 'bing', label: 'Bing (opened through the proxy)' }, { value: 'custom', label: 'Custom (URLs below)' }],
                     hint: 'Words typed in the Browse address bar open this engine\'s results through the proxy. With the allowlist on, add the engine\'s domain to the extra allowed domains.' },
                 { name: 'search_suggestions', label: 'Suggest search terms while typing (asks the search engine)', type: 'checkbox', value: s.search_suggestions },

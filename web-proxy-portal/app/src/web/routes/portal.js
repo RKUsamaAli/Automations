@@ -102,7 +102,22 @@ router.get('/search-suggest', async (req, res) => {
 });
 
 // Address-bar suggestions: the user's recently opened pages.
+// Live browser: a 60-second ticket for the WebSocket (/live/ws), checked by portal-live.
+router.post('/live/ticket', (req, res) => {
+    if (settings.get('browse_mode') !== 'live') return res.status(403).json({ error: 'The live browser is turned off by the administrator.' });
+    const { sign } = require('../../lib/crypto');
+    const ticket = sign({ uid: req.user.id, un: req.user.username, exp: Date.now() + 60000 }, config.appSecret, 'live-ticket');
+    res.json({ ticket, path: '/live/ws' });
+});
+
 // Recent searches (Browse page)
+router.post('/searches', (req, res) => {
+    const q = String((req.body && req.body.q) || '').trim();
+    if (!q) return res.status(400).json({ error: 'Missing search words' });
+    searchHistory.record(req.user.id, q);
+    events.record('search', { userId: req.user.id, detail: `google (live browser): ${q.slice(0, 200)}` });
+    res.json({ ok: true });
+});
 router.get('/searches', (req, res) => res.json(searchHistory.list(req.user.id, { q: req.query.q, limit: req.query.limit })));
 router.delete('/searches/:id', (req, res) => res.json({ removed: searchHistory.remove(req.user.id, req.params.id) }));
 router.delete('/searches', (req, res) => {

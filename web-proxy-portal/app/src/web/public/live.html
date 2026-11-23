@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+    <meta name="robots" content="noindex">
+    <title>Browser</title>
+    <meta name="theme-color" content="#f6f7f9">
+    <script src="/assets/js/theme.js"></script>
+    <link rel="stylesheet" href="/assets/css/app.css">
+</head>
+<body class="live-body">
+<header class="live-bar" role="toolbar" aria-label="Browser">
+    <a class="lb-btn" href="/" aria-label="Back to the start page" title="Start page"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg></a>
+    <button type="button" class="lb-btn" id="lb-back" aria-label="Back" title="Back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg></button>
+    <button type="button" class="lb-btn hide-xs" id="lb-forward" aria-label="Forward" title="Forward"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M9 18l6-6-6-6"/></svg></button>
+    <button type="button" class="lb-btn" id="lb-reload" aria-label="Reload" title="Reload"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg></button>
+    <form class="lb-addr" id="lb-form" role="search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+        <label for="lb-url" class="sr-only">Search or type a web address</label>
+        <input id="lb-url" type="text" enterkeyhint="go" placeholder="Search or type a web address" autocomplete="off" autocapitalize="none" spellcheck="false">
+    </form>
+    <div class="menu-wrap">
+        <button type="button" class="lb-btn lb-tabs" id="lb-tabs" aria-haspopup="menu" aria-expanded="false" aria-controls="lb-tab-menu" aria-label="Tabs" title="Tabs"><span id="lb-tab-count">1</span></button>
+        <div class="menu" id="lb-tab-menu" role="menu" aria-label="Tabs" hidden></div>
+    </div>
+    <button type="button" class="lb-btn" id="lb-kbd" aria-label="Keyboard" title="Show the keyboard"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg></button>
+</header>
+<main class="live-stage" id="main">
+    <canvas id="screen" aria-label="Website (live browser on the server)" role="img"></canvas>
+    <textarea id="kbd" class="live-kbd" aria-label="Type into the website" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"></textarea>
+    <div class="live-overlay" id="overlay" role="status" aria-live="polite"><div class="spinner" aria-hidden="true"></div><div id="overlay-text">Starting your browser…</div></div>
+    <div class="live-loading" id="loading" hidden></div>
+</main>
+<script src="/assets/js/common.js"></script>
+<script src="/assets/js/live.js"></script>
+</body>
+</html>

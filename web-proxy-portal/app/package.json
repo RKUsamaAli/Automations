@@ -20,7 +20,8 @@
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "playwright-core": "1.63.0",
-    "socks": "^2.8.4"
+    "socks": "^2.8.4",
+    "ws": "8.18.3"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0"
