@@ -146,10 +146,22 @@ const server = app.listen(config.web.port, config.web.host, () => {
 // Live browser WebSocket: handed through to portal-live (127.0.0.1:LIVE_PORT),
 // which checks the ticket. Same origin only.
 server.on('upgrade', (req, socket, head) => {
-    if (!req.url.startsWith('/live/ws?')) return socket.destroy();
-    const origin = req.headers.origin;
-    if (origin && origin !== config.appBaseUrl) return socket.end('HTTP/1.1 403 Forbidden\r\n\r\n');
-    const up = require('net').connect(Number(process.env.LIVE_PORT) || 3004, '127.0.0.1', () => {
+    const wsLog = require('./../lib/logger')('live-ws');
+    const refuse = (status, reason, extra) => {
+        wsLog.warn(`live WebSocket refused: ${reason}`, { url: String(req.url).split('?')[0], origin: req.headers.origin || null, ...extra });
+        socket.end(`HTTP/1.1 ${status} ${reason}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n`);
+    };
+    if (!req.url.startsWith('/live/ws?')) return refuse(404, 'Not Found');
+    // same site only: compare host names (protocol / port may differ behind nginx/TLS)
+    let originHost = null;
+    try {
+        originHost = req.headers.origin ? new URL(req.headers.origin).hostname : null;
+    } catch (_) {
+        originHost = '?';
+    }
+    if (originHost && originHost !== config.appDomain) return refuse(403, 'Origin Not Allowed', { expected: config.appDomain });
+    const livePort = Number(process.env.LIVE_PORT) || 3004;
+    const up = require('net').connect(livePort, '127.0.0.1', () => {
         const lines = [`${req.method} ${req.url} HTTP/1.1`];
         for (let i = 0; i < req.rawHeaders.length; i += 2) lines.push(`${req.rawHeaders[i]}: ${req.rawHeaders[i + 1]}`);
         up.write(lines.join('\r\n') + '\r\n\r\n');
@@ -159,7 +171,7 @@ server.on('upgrade', (req, socket, head) => {
     });
     up.setNoDelay(true);
     socket.setNoDelay(true);
-    up.on('error', () => socket.end('HTTP/1.1 503 Service Unavailable\r\n\r\n'));
+    up.on('error', (e) => refuse(503, 'Live Browser Unavailable', { error: e.message, port: livePort }));
     socket.on('error', () => up.destroy());
     socket.on('close', () => up.destroy());
 });

@@ -483,10 +483,18 @@ function start() {
         // ticket from portal-web (/api/portal/live/ticket): signed, 60 s, one user
         const t = verify(u.searchParams.get('t'), config.appSecret, TICKET_PURPOSE);
         if (u.pathname !== '/live/ws' || !t || !t.uid) {
-            socket.end('HTTP/1.1 403 Forbidden\r\n\r\n');
+            log.warn('live WebSocket refused: missing, invalid or expired ticket');
+            socket.end('HTTP/1.1 403 Invalid Ticket\r\nContent-Length: 0\r\nConnection: close\r\n\r\n');
             return;
         }
-        wss.handleUpgrade(req, socket, head, (ws) => connection(ws, { id: t.uid, name: t.un || t.uid }, u.searchParams));
+        wss.handleUpgrade(req, socket, head, (ws) => {
+            // connection test (portal-cli test-live): answer and close, no browser
+            if (t.probe) {
+                ws.send(JSON.stringify({ t: 'status', state: 'probe-ok', browsers: browsers.size, max: MAX_BROWSERS }));
+                return ws.close(1000, 'probe');
+            }
+            connection(ws, { id: t.uid, name: t.un || t.uid }, u.searchParams);
+        });
     });
     server.listen(PORT, '127.0.0.1', () => {
         log.info(`live browser service on 127.0.0.1:${PORT} (max ${MAX_BROWSERS} browsers, idle close ${IDLE_MS / 60000} min)`);

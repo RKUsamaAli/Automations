@@ -18,6 +18,7 @@
  *   seed-examples                             add the example injected scripts (disabled)
  *   test-search "<words>" [pool name]           Google results through the search worker (and that
  *                                             pool's proxy) - checks the whole search path on this server
+ *   test-live                             check the live browser connection hop by hop
  *   record-event <type> <info|warn|error> <detail...>
  *                                             write an activity-log entry (used by the deploy /
  *                                             rollback / backup scripts; types: deploy_*, rollback_*, backup_*, server_*)
@@ -163,6 +164,32 @@ async function main() {
             console.log(`Engine: ${r.engine} - ${r.results.length} results in ${Date.now() - started} ms`);
             if (r.note) console.log(`Note: ${r.note}`);
             for (const x of r.results.slice(0, 5)) console.log(`  - ${x.title}\n    ${x.url}`);
+            break;
+        }
+        case 'test-live': {
+            // Opens the live-browser WebSocket hop by hop and says where it fails.
+            const WebSocket = require('ws');
+            const config = require('../config');
+            const { sign } = require('../lib/crypto');
+            const ticket = () => sign({ uid: 'cli-probe', un: 'portal-cli', probe: true, exp: Date.now() + 60000 }, config.appSecret, 'live-ticket');
+            const hops = [
+                ['live service (portal-live)', `ws://127.0.0.1:${Number(process.env.LIVE_PORT) || 3004}/live/ws`],
+                ['portal (portal-web)', `ws://127.0.0.1:${config.web.port}/live/ws`],
+                ['public address (nginx, TLS)', `${config.appBaseUrl.replace(/^http/, 'ws')}/live/ws`]
+            ];
+            let failed = false;
+            for (const [name, url] of hops) {
+                const result = await new Promise((resolve) => {
+                    const ws = new WebSocket(`${url}?t=${encodeURIComponent(ticket())}`, { origin: config.appBaseUrl, handshakeTimeout: 8000, rejectUnauthorized: false });
+                    ws.on('message', (d) => resolve('OK  ' + d.toString().slice(0, 120)));
+                    ws.on('unexpected-response', (_q, res) => resolve(`FAILED  HTTP ${res.statusCode} ${res.statusMessage || ''}`));
+                    ws.on('error', (e) => resolve('FAILED  ' + e.message));
+                    setTimeout(() => resolve('FAILED  no answer in 10 s'), 10000).unref();
+                });
+                if (result.startsWith('FAILED')) failed = true;
+                console.log(`${result.startsWith('OK') ? '[ OK ]' : '[FAIL]'} ${name.padEnd(30)} ${url}\n        ${result}`);
+            }
+            if (failed) process.exitCode = 1;
             break;
         }
         case 'record-event': {
