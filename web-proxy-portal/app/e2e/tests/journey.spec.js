@@ -176,6 +176,11 @@ test.describe.serial('full product journey', () => {
 
     // --------------------------------------------------------- live browser --
     test('live browser (default): a real Chrome on the server, shown in the page; sign in to a site with the keyboard', async () => {
+        // (a shared test server keeps the previous run's settings: make sure it is the default mode)
+        await admin.getByRole('button', { name: 'Settings' }).click();
+        await admin.locator('#set-browse_mode').selectOption('live');
+        await admin.locator('#save-settings').click();
+        await expect(admin.getByText('Settings saved')).toBeVisible();
         await login(phone, user.name, user.pass);
         await expect(phone).toHaveURL(S.appUrl + '/');
         await expect(phone.locator('#conn-chip')).toHaveCount(0); // no proxies in live mode (yet)
@@ -595,7 +600,7 @@ test.describe.serial('full product journey', () => {
         const steps = admin.getByRole('list', { name: 'Steps before the error' });
         await expect(steps).toContainText('Session started');
         await expect(steps).toContainText('http://broken.localtest/checkout');
-        await expect(steps).toContainText('Signed in');
+        await expect(steps).toContainText('Session ended'); // the steps just before (the list keeps the last ~30)
         await expect(admin.locator('#modal')).toContainText(user.name);
         await shot(admin, '19c-admin-error-detail', { fullPage: false });
         await admin.getByRole('button', { name: 'Mark resolved' }).click();
