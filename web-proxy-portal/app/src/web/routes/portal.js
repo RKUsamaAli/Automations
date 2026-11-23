@@ -103,8 +103,35 @@ router.get('/search-suggest', async (req, res) => {
 
 // Address-bar suggestions: the user's recently opened pages.
 // Live browser: a 60-second ticket for the WebSocket (/live/ws), checked by portal-live.
-router.post('/live/ticket', (req, res) => {
+/** Asks portal-live for /healthz (1.5 s). -> { ok, browsers, max, ... } or { ok:false, error } */
+function liveHealth() {
+    return new Promise((resolve) => {
+        const r = require('http').get({ host: '127.0.0.1', port: Number(process.env.LIVE_PORT) || 3004, path: '/healthz', timeout: 1500 }, (res) => {
+            let body = '';
+            res.on('data', (d) => (body += d));
+            res.on('end', () => {
+                try {
+                    resolve(JSON.parse(body));
+                } catch (_) {
+                    resolve({ ok: false, error: `answered HTTP ${res.statusCode}` });
+                }
+            });
+        });
+        r.on('timeout', () => r.destroy(new Error('no answer within 1.5 s')));
+        r.on('error', (e) => resolve({ ok: false, error: e.code === 'ECONNREFUSED' ? 'not running (nothing listens on port ' + (Number(process.env.LIVE_PORT) || 3004) + ')' : e.message }));
+    });
+}
+
+router.post('/live/ticket', async (req, res) => {
     if (settings.get('browse_mode') !== 'live') return res.status(403).json({ error: 'The live browser is turned off by the administrator.' });
+    const health = await liveHealth();
+    if (!health.ok) {
+        require('../../lib/logger')('live').error('live browser service unavailable', { error: health.error });
+        return res.status(503).json({
+            error: 'The live browser service is not running on the server.',
+            detail: req.user.role === 'admin' ? `portal-live: ${health.error}. On the server run: sudo portal-deploy   (then check: sudo portal-status)` : undefined
+        });
+    }
     const { sign } = require('../../lib/crypto');
     const ticket = sign({ uid: req.user.id, un: req.user.username, exp: Date.now() + 60000 }, config.appSecret, 'live-ticket');
     res.json({ ticket, path: '/live/ws' });

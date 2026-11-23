@@ -218,6 +218,20 @@ step "8/9 Reloading processes and checking health"
 pm2_reload "$NEW_RELEASE"
 wait_healthy "$NEW_RELEASE" || die "New release is not healthy."
 ok "portal-web and portal-proxy are healthy on $NEW_RELEASE"
+# Live browser + search worker: not part of the rollback decision, but say so loudly.
+for svc in "portal-live|$(app_env LIVE_PORT 3004)|live" "portal-search|$(app_env SEARCH_PORT 3003)|search"; do
+    IFS='|' read -r name port logname <<<"$svc"
+    up=""
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        if curl -fsS --max-time 2 "http://127.0.0.1:${port}/healthz" >/dev/null 2>&1; then up=1; break; fi
+        sleep 1
+    done
+    if [[ -n "$up" ]]; then ok "$name is running"
+    else
+        warn "$name is NOT answering on 127.0.0.1:${port} - last log lines:"
+        tail -n 15 "$SHARED_DIR/logs/${logname}.err.log" "$SHARED_DIR/logs/${logname}.out.log" 2>/dev/null | sed 's/^/        /' || true
+    fi
+done
 history_add deploy "$NEW_RELEASE" success "ref=$REF commit=$SHA previous=${PREVIOUS:-none}"
 
 # The release is live and healthy: from here on nothing may undo it. Cleanup

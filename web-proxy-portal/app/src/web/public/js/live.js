@@ -18,6 +18,7 @@
     var params = new URLSearchParams(location.search);
     var firstOpen = null;
     var retry = 0;
+    var failedOpens = 0; // connections that closed before (or right after) opening
     var closedOnPurpose = false;
 
     function googleUrl(q) { return 'https://www.google.com/search?q=' + encodeURIComponent(q); }
@@ -32,10 +33,20 @@
     else if (params.get('url')) firstOpen = params.get('url');
     if (params.get('q') || params.get('url')) history.replaceState(null, '', '/live');
 
-    function show(text, spinner) {
+    function show(text, spinner, retryButton) {
         overlay.hidden = !text;
         P.$('#overlay-text').textContent = text || '';
         P.$('.spinner', overlay).style.display = spinner === false ? 'none' : '';
+        var b = P.$('#overlay-retry');
+        if (retryButton && !b) {
+            b = document.createElement('button');
+            b.type = 'button';
+            b.id = 'overlay-retry';
+            b.className = 'primary';
+            b.textContent = 'Try again';
+            b.addEventListener('click', function () { failedOpens = 0; retry = 0; closedOnPurpose = false; b.remove(); connect(); });
+            overlay.appendChild(b);
+        } else if (!retryButton && b) b.remove();
     }
     function send(msg) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(msg)); }
 
@@ -62,14 +73,16 @@
         try {
             t = await P.api('POST', '/api/portal/live/ticket');
         } catch (err) {
-            return show(err.message, false);
+            return show(err.message + (err.detail ? ' - ' + err.detail : ''), false, true);
         }
+        var gotMessage = false;
         var q = '?t=' + encodeURIComponent(t.ticket);
         if (firstOpen) { q += '&open=nav&url=' + encodeURIComponent(firstOpen); firstOpen = null; }
         ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + t.path + q);
         ws.binaryType = 'blob';
         ws.onopen = function () { retry = 0; measure(true); };
         ws.onmessage = function (e) {
+            gotMessage = true;
             if (typeof e.data !== 'string') { pending = e.data; requestAnimationFrame(draw); return; }
             var m;
             try { m = JSON.parse(e.data); } catch (_) { return; }
@@ -82,7 +95,13 @@
         };
         ws.onclose = function (e) {
             if (closedOnPurpose) return;
-            if (e.code === 4000) { show('The browser was closed (' + (e.reason || 'idle') + '). Reload the page to start it again.', false); return; }
+            if (e.code === 4000) { show('The browser was closed (' + (e.reason || 'idle') + ').', false, true); return; }
+            if (!gotMessage) failedOpens += 1;
+            if (failedOpens >= 3) {
+                P.reportError('live_connect_failed', 'Live browser connection closed before any data (code ' + e.code + ')', { status: e.code });
+                show('Could not connect to the live browser (connection closed, code ' + e.code + '). The server may be blocking WebSockets.', false, true);
+                return;
+            }
             retry += 1;
             show('Connection lost. Reconnecting…');
             setTimeout(connect, Math.min(10000, 500 * Math.pow(2, Math.min(retry, 5))));
