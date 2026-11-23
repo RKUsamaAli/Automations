@@ -10,6 +10,7 @@
     var siteList = [];
     var serverSearch = true; // Google results via the server's browser (portal.searchServer)
     var signedIn = false;
+    var liveMode = false; // portal.browseMode === 'live': open everything in the live browser (/live)
 
     /** 'direct' (proxy switch off), a pool id, or 'auto' (automatic proxy). */
     function selectedPool() {
@@ -17,12 +18,19 @@
         return P.$('#pool').value || 'auto';
     }
     function goSearch(q) {
+        if (liveMode) { location.href = '/live?q=' + encodeURIComponent(q); return; }
         location.href = '/search?q=' + encodeURIComponent(q) + '&via=' + encodeURIComponent(selectedPool());
     }
 
     /** Asks the portal for a one-time hand-off link and opens the proxy. */
     async function browse(body, button) {
         if (!signedIn) { location.href = '/login?next=/'; return; }
+        if (liveMode) {
+            var site = body.siteId && siteList.filter(function (x) { return x.id === body.siteId; })[0];
+            var url = site ? site.startUrl : body.url;
+            location.href = '/live?' + (url && LOOKS_LIKE_URL.test(url) ? 'url=' : 'q=') + encodeURIComponent(url || '');
+            return;
+        }
         var done = P.busy(button, 'Opening');
         P.showError(goError, '');
         try {
@@ -171,27 +179,32 @@
         loadRecent();
     });
 
+    // back from signing in with a pending search/address (/?q=...): run it
+    function runPending() {
+        var pending = new URLSearchParams(location.search).get('q');
+        if (pending) {
+            history.replaceState(null, '', '/');
+            P.$('#url').value = pending;
+            P.$('#go-form').requestSubmit();
+        }
+    }
+
     P.shell('browse', { public: true }).then(function (me) {
         if (me.portal.title) P.$('#start-title').textContent = me.portal.title;
         serverSearch = me.portal.searchServer !== false;
         if (!me.user) return; // signed out: search box only; searching asks to sign in
         signedIn = true;
-        // the proxy chip goes into the top bar, right side
-        var slot = P.$('.topbar .page-actions');
-        slot.appendChild(P.$('#conn-template').content.cloneNode(true));
-        P.popover(P.$('#conn-chip'), P.$('#conn-panel'));
+        liveMode = me.portal.browseMode === 'live';
         if (me.portal.notice) {
             P.$('#notice').textContent = me.portal.notice;
             P.$('#notice').classList.remove('hidden');
         }
-        return Promise.all([loadPools(me.portal), loadSites(), loadRecent()]).then(function () {
-            // back from signing in with a pending search/address (/?q=...): run it
-            var pending = new URLSearchParams(location.search).get('q');
-            if (pending) {
-                history.replaceState(null, '', '/');
-                P.$('#url').value = pending;
-                P.$('#go-form').requestSubmit();
-            }
-        });
+        // live browser: no proxies yet - search box, recent searches and sites only
+        if (liveMode) return Promise.all([loadSites(), loadRecent()]).then(runPending);
+        // the proxy chip goes into the top bar, right side
+        var slot = P.$('.topbar .page-actions');
+        slot.appendChild(P.$('#conn-template').content.cloneNode(true));
+        P.popover(P.$('#conn-chip'), P.$('#conn-panel'));
+        return Promise.all([loadPools(me.portal), loadSites(), loadRecent()]).then(runPending);
     }).catch(function (err) { P.showError(goError, err.message); });
 })();

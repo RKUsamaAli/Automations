@@ -153,6 +153,7 @@ router.get('/me', (req, res) => {
             registration: s.registration_mode,
             userProxies: s.user_proxies_enabled,
             allowDirect: s.allow_direct,
+            browseMode: s.browse_mode, // live | proxy
             searchServer: s.search_engine === 'google', // words -> /search results page (server browser)
             proxyBaseUrl: config.proxyBaseUrl
         }

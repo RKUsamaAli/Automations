@@ -436,7 +436,9 @@
                 (info.portal.registration && info.portal.registration !== 'closed' ? '<a class="btn ghost small hide-sm" href="/register">Create account</a>' : '') +
                 '<a class="btn primary small" href="/login?next=' + encodeURIComponent(location.pathname + location.search) + '">' + icon('signin', 'icon') + '<span>Sign in</span></a></div>';
         } else {
-            var items = [{ id: 'browse', href: '/', label: 'Search', icon: 'search' }, { id: 'sessions', href: '/sessions', label: 'Sessions', icon: 'sessions' }];
+            var items = [{ id: 'browse', href: '/', label: 'Search', icon: 'search' }];
+            if (info.portal.browseMode === 'live') items.push({ id: 'live', href: '/live', label: 'Browser', icon: 'sessions' });
+            else items.push({ id: 'sessions', href: '/sessions', label: 'Sessions', icon: 'sessions' });
             if (info.portal.userProxies) items.push({ id: 'proxies', href: '/proxies', label: 'My proxies', icon: 'proxies' });
             items.push({ id: 'account', href: '/account', label: 'Account', icon: 'account' });
             if (info.user.role === 'admin') items.push({ id: 'admin', href: '/admin', label: 'Admin', icon: 'admin' });

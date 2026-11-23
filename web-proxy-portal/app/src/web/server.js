@@ -126,6 +126,7 @@ app.get('/logout', (_req, res) => res.redirect('/account')); // signing out is a
 app.get('/', page('index.html')); // start page: works signed out too (searching asks to sign in)
 app.get('/sessions', requireUser, page('sessions.html'));
 app.get('/search', requireUser, page('search.html'));
+app.get('/live', requireUser, page('live.html'));
 app.get('/proxies', requireUser, page('proxies.html'));
 app.get('/account', requireUser, page('account.html'));
 app.get('/admin', requireAdmin, page('admin.html'));
@@ -142,6 +143,27 @@ const server = app.listen(config.web.port, config.web.host, () => {
     // Tell PM2 we are ready (used with wait_ready for zero-downtime reloads).
     if (process.send) process.send('ready');
 });
+// Live browser WebSocket: handed through to portal-live (127.0.0.1:LIVE_PORT),
+// which checks the ticket. Same origin only.
+server.on('upgrade', (req, socket, head) => {
+    if (!req.url.startsWith('/live/ws?')) return socket.destroy();
+    const origin = req.headers.origin;
+    if (origin && origin !== config.appBaseUrl) return socket.end('HTTP/1.1 403 Forbidden\r\n\r\n');
+    const up = require('net').connect(Number(process.env.LIVE_PORT) || 3004, '127.0.0.1', () => {
+        const lines = [`${req.method} ${req.url} HTTP/1.1`];
+        for (let i = 0; i < req.rawHeaders.length; i += 2) lines.push(`${req.rawHeaders[i]}: ${req.rawHeaders[i + 1]}`);
+        up.write(lines.join('\r\n') + '\r\n\r\n');
+        if (head && head.length) up.write(head);
+        up.pipe(socket);
+        socket.pipe(up);
+    });
+    up.setNoDelay(true);
+    socket.setNoDelay(true);
+    up.on('error', () => socket.end('HTTP/1.1 503 Service Unavailable\r\n\r\n'));
+    socket.on('error', () => up.destroy());
+    socket.on('close', () => up.destroy());
+});
+
 // Keep idle connections from nginx open longer than nginx's own keepalive
 // (60 s), so nginx never reuses a socket Node.js just closed (-> random 502s).
 server.keepAliveTimeout = 65000;

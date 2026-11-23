@@ -4,6 +4,7 @@
  *   portal-web   - login, landing page, admin panel, API   (APP_DOMAIN)
  *   portal-proxy - Rammerhead proxy engine                 (PROXY_DOMAIN)
  *   portal-search - headless Chromium for Google results    (127.0.0.1 only)
+ *   portal-live   - live browser: real Chromium per user      (127.0.0.1 only)
  *
  * IMPORTANT: paths point at /opt/proxy-portal/current (a symlink). A deploy or
  * rollback only re-points that symlink and reloads PM2, so both processes
@@ -71,6 +72,23 @@ module.exports = {
             env: { NODE_ENV: 'production', PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH || path.join(BASE, 'shared', 'ms-playwright') },
             out_file: path.join(LOGS, 'search.out.log'),
             error_file: path.join(LOGS, 'search.err.log'),
+            merge_logs: true,
+            time: false,
+            exp_backoff_restart_delay: 500
+        },
+        {
+            // Live browser: a real Chromium per user, shown in the page (/live)
+            // over a WebSocket that portal-web hands through. 127.0.0.1:LIVE_PORT.
+            name: 'portal-live',
+            cwd: CURRENT,
+            script: path.join(CURRENT, 'src/live/worker.js'),
+            exec_mode: 'fork',
+            instances: 1,
+            kill_timeout: 10000,
+            max_memory_restart: process.env.LIVE_MAX_MEMORY || '400M', // node side; each Chromium is its own process
+            env: { NODE_ENV: 'production', PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH || path.join(BASE, 'shared', 'ms-playwright') },
+            out_file: path.join(LOGS, 'live.out.log'),
+            error_file: path.join(LOGS, 'live.err.log'),
             merge_logs: true,
             time: false,
             exp_backoff_restart_delay: 500
