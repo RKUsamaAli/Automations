@@ -164,3 +164,28 @@ test('egress guard: private and internal addresses are refused', async () => {
     assert.deepEqual(await resolveTarget('site.test', 80), { host: '127.0.0.1', port: sitePort });
     if (prev !== undefined) process.env.ALLOW_PRIVATE_UPSTREAMS = prev;
 });
+
+test('identity is consistent: user-agent and client hints agree (no "Headless", same platform)', { skip }, async () => {
+    const seen = [];
+    const probe = http.createServer((req, res) => {
+        seen.push({ ua: req.headers['user-agent'], platform: req.headers['sec-ch-ua-platform'], mobile: req.headers['sec-ch-ua-mobile'] });
+        res.writeHead(200, { 'content-type': 'text/html' });
+        res.end('<title>UA</title>ok');
+    });
+    await new Promise((r) => probe.listen(0, '127.0.0.1', r));
+    process.env.LIVE_RESOLVE = `site.test=127.0.0.1:${sitePort},ua.test=127.0.0.1:${probe.address().port}`;
+    const v = viewer(`t=${encodeURIComponent(ticket('user-ua'))}`);
+    await v.opened;
+    v.send({ t: 'hello', w: 800, h: 600, dpr: 1 });
+    v.send({ t: 'nav', url: 'http://ua.test/' });
+    await v.until((x) => x.lastState && x.lastState.title === 'UA');
+    const d = seen[seen.length - 1];
+    assert.doesNotMatch(d.ua, /Headless/);
+    assert.match(d.ua, /X11; Linux x86_64/);
+    v.send({ t: 'resize', w: 390, h: 760, dpr: 1, mobile: true });
+    await new Promise((r) => setTimeout(r, 500));
+    v.send({ t: 'reload' });
+    await v.until(() => seen.length >= 2 && /Android/.test(seen[seen.length - 1].ua));
+    v.ws.close();
+    probe.close();
+});

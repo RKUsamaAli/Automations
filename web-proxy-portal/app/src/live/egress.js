@@ -21,6 +21,47 @@ const log = require('../lib/logger')('live-egress');
 
 const allowPrivate = () => process.env.ALLOW_PRIVATE_UPSTREAMS === 'true';
 
+/** Optional upstream HTTP proxy for everything (LIVE_UPSTREAM_PROXY=http://user:pass@host:port). */
+function upstream() {
+    const v = process.env.LIVE_UPSTREAM_PROXY;
+    if (!v) return null;
+    try {
+        const u = new URL(v);
+        const auth = u.username ? 'Basic ' + Buffer.from(`${decodeURIComponent(u.username)}:${decodeURIComponent(u.password)}`).toString('base64') : null;
+        return { host: u.hostname, port: Number(u.port) || 80, auth };
+    } catch (_) {
+        return null;
+    }
+}
+
+/** Opens a TCP tunnel to host:port, directly or through the upstream proxy. */
+function tunnel(dest, hostname, port, cb) {
+    const up = upstream();
+    if (!up) {
+        const s = net.connect(dest.port, dest.host, () => cb(null, s));
+        s.on('error', (e) => cb(e));
+        return s;
+    }
+    const s = net.connect(up.port, up.host, () => {
+        s.write(`CONNECT ${hostname}:${port} HTTP/1.1\r\nHost: ${hostname}:${port}\r\n${up.auth ? `Proxy-Authorization: ${up.auth}\r\n` : ''}\r\n`);
+        let buf = Buffer.alloc(0);
+        const onData = (d) => {
+            buf = Buffer.concat([buf, d]);
+            const end = buf.indexOf('\r\n\r\n');
+            if (end === -1) return;
+            s.removeListener('data', onData);
+            const ok = /^HTTP\/1\.[01] 200/.test(buf.slice(0, 20).toString('latin1'));
+            if (!ok) return cb(new Error('upstream proxy refused: ' + buf.slice(0, buf.indexOf('\r\n')).toString('latin1')));
+            const rest = buf.slice(end + 4);
+            if (rest.length) s.unshift(rest);
+            cb(null, s);
+        };
+        s.on('data', onData);
+    });
+    s.on('error', (e) => cb(e));
+    return s;
+}
+
 function testMap() {
     const out = new Map();
     for (const part of String(process.env.LIVE_RESOLVE || '').split(',')) {
@@ -37,7 +78,7 @@ async function resolveTarget(hostname, port) {
     if (mapped) return mapped;
     if (!port || port < 1 || port > 65535) throw new Error('bad port');
     if (!allowPrivate() && isPrivateHost(h)) throw Object.assign(new Error(`${h} is a private address`), { blocked: true });
-    if (net.isIP(h)) return { host: h, port };
+    if (net.isIP(h) || upstream()) return { host: h, port }; // with an upstream proxy, it resolves the name
     let addrs;
     try {
         addrs = await dns.lookup(h, { all: true });
@@ -103,14 +144,18 @@ function start({ onBlocked } = {}) {
             blocked(m[1], e);
             return sock.end(`HTTP/1.1 ${e.blocked ? 403 : 502} ${e.blocked ? 'Forbidden' : 'Bad Gateway'}\r\n\r\n`);
         }
-        const up = net.connect(dest.port, dest.host, () => {
+        let done = false;
+        const up = tunnel(dest, m[1], Number(m[2]), (err, conn) => {
+            if (done) return;
+            done = true;
+            if (err) return sock.end('HTTP/1.1 502 Bad Gateway\r\n\r\n');
+            conn.setNoDelay(true);
             sock.write('HTTP/1.1 200 Connection Established\r\n\r\n');
-            if (head && head.length) up.write(head);
-            up.pipe(sock);
-            sock.pipe(up);
+            if (head && head.length) conn.write(head);
+            conn.pipe(sock);
+            sock.pipe(conn);
+            conn.on('error', () => sock.destroy());
         });
-        up.setNoDelay(true);
-        up.on('error', () => sock.destroy());
         sock.on('close', () => up.destroy());
     });
     // ws:// upgrades through an absolute-URL request

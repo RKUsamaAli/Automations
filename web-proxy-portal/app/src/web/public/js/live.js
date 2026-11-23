@@ -53,6 +53,12 @@
     // --------------------------------------------------------- frames --
     var pending = null;
     var drawing = false;
+    function ack() { send({ t: 'ack' }); }
+    function onFrame(blob) {
+        if (pending) ack(); // replaced before it was drawn
+        pending = blob;
+        requestAnimationFrame(draw);
+    }
     function draw() {
         if (!pending || drawing) return;
         var blob = pending;
@@ -63,7 +69,7 @@
             ctx.drawImage(img, 0, 0);
             img.close && img.close();
             if (!overlay.hidden && P.$('#overlay-text').textContent.indexOf('Starting') === 0) show('');
-        }).catch(function () {}).then(function () { drawing = false; if (pending) requestAnimationFrame(draw); });
+        }).catch(function () {}).then(function () { drawing = false; ack(); if (pending) requestAnimationFrame(draw); });
     }
 
     // ------------------------------------------------------- connect --
@@ -83,13 +89,14 @@
         ws.onopen = function () { retry = 0; measure(true); };
         ws.onmessage = function (e) {
             gotMessage = true;
-            if (typeof e.data !== 'string') { pending = e.data; requestAnimationFrame(draw); return; }
+            if (typeof e.data !== 'string') { onFrame(e.data); return; }
             var m;
             try { m = JSON.parse(e.data); } catch (_) { return; }
             if (m.t === 'state') return onState(m);
             if (m.t === 'status') return show(m.state === 'starting' ? 'Starting your browser…' : '');
             if (m.t === 'notice') return m.message && P.toast(m.message, 5000);
             if (m.t === 'focus') return onFocus(m.editable);
+            if (m.t === 'cursor') { canvas.style.cursor = /^[a-z-]+$/.test(m.value) ? m.value : 'default'; return; }
             if (m.t === 'dialog') return onDialog(m);
             if (m.t === 'error') { closedOnPurpose = true; show(m.message + (m.detail ? ' (' + m.detail + ')' : ''), false); }
         };
@@ -172,7 +179,7 @@
             if (touch.moved) {
                 // finger drag scrolls the page
                 var p = point(e);
-                send({ t: 'wheel', x: p.x, y: p.y, dx: -dx * (size.w / canvas.getBoundingClientRect().width), dy: -dy * (size.h / canvas.getBoundingClientRect().height) });
+                queueWheel({ t: 'wheel', x: p.x, y: p.y, dx: -dx * (size.w / canvas.getBoundingClientRect().width), dy: -dy * (size.h / canvas.getBoundingClientRect().height) });
                 touch.x = e.clientX;
                 touch.y = e.clientY;
             }
@@ -196,10 +203,17 @@
         send(merge({ t: 'mouse', type: 'up', button: e.button, buttons: e.buttons, clicks: e.detail || 1 }, merge(point(e), modsOf(e))));
     });
     canvas.addEventListener('pointercancel', function () { touch = null; });
+    // wheel / finger scrolling: summed per animation frame (one message, not dozens)
+    var wheelQueued = null;
+    function queueWheel(msg) {
+        if (wheelQueued) { wheelQueued.dx += msg.dx; wheelQueued.dy += msg.dy; wheelQueued.x = msg.x; wheelQueued.y = msg.y; return; }
+        wheelQueued = msg;
+        requestAnimationFrame(function () { send(wheelQueued); wheelQueued = null; });
+    }
     canvas.addEventListener('wheel', function (e) {
         e.preventDefault();
         var k = e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? size.h : 1;
-        send(merge({ t: 'wheel', dx: e.deltaX * k, dy: e.deltaY * k }, merge(point(e), modsOf(e))));
+        queueWheel(merge({ t: 'wheel', dx: e.deltaX * k, dy: e.deltaY * k }, merge(point(e), modsOf(e))));
     }, { passive: false });
 
     // ------------------------------------------------------- keyboard --

@@ -37,12 +37,15 @@ const log = require('../lib/logger')('live');
 const PORT = Number(process.env.LIVE_PORT) || 3004;
 const MAX_BROWSERS = Math.max(1, Number(process.env.LIVE_MAX_BROWSERS) || 2);
 const IDLE_MS = (Number(process.env.LIVE_IDLE_MIN) || 15) * 60000;
-const QUALITY = Math.min(95, Math.max(20, Number(process.env.LIVE_QUALITY) || 70));
+const QUALITY = Math.min(95, Math.max(20, Number(process.env.LIVE_QUALITY) || 65)); // best JPEG quality (lowered automatically on slow links)
+const MIN_QUALITY = 30;
+const MAX_DPR = Math.min(2, Math.max(1, Number(process.env.LIVE_MAX_DPR) || 1)); // 1 = CSS pixels (4x less data than a 2x screen)
+const IN_FLIGHT = 2; // frames on their way to a viewer before newer ones replace older ones
 const PROFILES = () => process.env.LIVE_PROFILES_DIR || path.join(config.paths.dataDir, 'live-profiles');
 const TICKET_PURPOSE = 'live-ticket';
 
 const MOBILE_UA = (v) => `Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${v}.0.0.0 Mobile Safari/537.36`;
-const DESKTOP_UA = (v) => `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${v}.0.0.0 Safari/537.36`;
+const DESKTOP_UA = (v) => `Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${v}.0.0.0 Safari/537.36`;
 
 // ------------------------------------------------------------ display ----
 let display = null;
@@ -108,7 +111,7 @@ class UserBrowser {
             viewport: null, // sizes come from the viewer (CDP device metrics)
             proxy: { server: `http://127.0.0.1:${port}`, bypass: '<-loopback>' },
             acceptDownloads: false,
-            ignoreHTTPSErrors: false,
+            ignoreHTTPSErrors: process.env.LIVE_IGNORE_TLS_ERRORS === 'true', // test machines behind an intercepting proxy only
             args: ['--disable-dev-shm-usage', '--no-first-run', '--no-default-browser-check', '--disable-features=Translate,MediaRouter', '--window-size=1920,1200', '--window-position=0,0', '--force-webrtc-ip-handling-policy=disable_non_proxied_udp']
         });
         this.context.on('page', (page) => this.addTab(page, true));
@@ -150,7 +153,10 @@ class UserBrowser {
         if (this.active === tab) {
             this.active = null;
             if (this.tabs.length) await this.activate(this.tabs[this.tabs.length - 1].id).catch(() => {});
-            else if (this.context) await this.addTab(await this.context.newPage().catch(() => null), true).catch(() => {});
+            else if (this.context && !this.closing) {
+                const p = await this.context.newPage().catch(() => null);
+                if (p) await this.addTab(p, true).catch(() => {});
+            }
         }
         this.sendState();
     }
@@ -169,6 +175,8 @@ class UserBrowser {
             if (!this.major) {
                 const v = await tab.cdp.send('Browser.getVersion').catch(() => null);
                 this.major = v && /\/(\d+)\./.test(v.product) ? /\/(\d+)\./.exec(v.product)[1] : null;
+                this.fullVersion = v && /\/([\d.]+)/.test(v.product) ? /\/([\d.]+)/.exec(v.product)[1] : null;
+                this.realUa = v ? v.userAgent : null;
             }
         }
         await this.applySize(tab);
@@ -181,31 +189,104 @@ class UserBrowser {
         const cdp = tab.cdp;
         await cdp.send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: dpr, mobile, screenWidth: w, screenHeight: h }).catch(() => {});
         await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: mobile, maxTouchPoints: mobile ? 5 : 0 }).catch(() => {});
-        const ua = mobile ? MOBILE_UA(this.chromeMajor()) : DESKTOP_UA(this.chromeMajor());
-        await cdp.send('Emulation.setUserAgentOverride', { userAgent: ua, platform: mobile ? 'Android' : 'Windows' }).catch(() => {});
+        // Identity: the user-agent string AND the client hints (Sec-CH-UA-*) must agree,
+        // or bot checks (Cloudflare ...) flag the browser. Desktop: the real Chrome on
+        // Linux as it is (only "HeadlessChrome" -> "Chrome" when headless). Phones: a
+        // consistent Android identity.
+        const major = this.chromeMajor();
+        const full = this.fullVersion || `${major}.0.0.0`;
+        const brands = [{ brand: 'Chromium', version: major }, { brand: 'Not.A/Brand', version: '99' }];
+        const fullVersionList = [{ brand: 'Chromium', version: full }, { brand: 'Not.A/Brand', version: '99.0.0.0' }];
+        if (mobile) {
+            await cdp.send('Emulation.setUserAgentOverride', {
+                userAgent: MOBILE_UA(major),
+                platform: 'Linux armv8l',
+                userAgentMetadata: { brands, fullVersionList, fullVersion: full, platform: 'Android', platformVersion: '14.0.0', architecture: '', model: 'Pixel 8', mobile: true, bitness: '', wow64: false }
+            }).catch(() => {});
+        } else {
+            const real = this.realUa || DESKTOP_UA(major);
+            await cdp.send('Emulation.setUserAgentOverride', {
+                userAgent: real.replace('HeadlessChrome', 'Chrome'),
+                platform: 'Linux x86_64',
+                userAgentMetadata: { brands, fullVersionList, fullVersion: full, platform: 'Linux', platformVersion: '6.8.0', architecture: 'x86', model: '', mobile: false, bitness: '64', wow64: false }
+            }).catch(() => {});
+        }
     }
 
     async startCast(tab) {
         const { w, h, dpr } = this.size;
+        if (!this.quality) this.quality = QUALITY;
         await tab.cdp.send('Page.stopScreencast').catch(() => {});
-        await tab.cdp.send('Page.startScreencast', { format: 'jpeg', quality: QUALITY, maxWidth: Math.round(w * dpr), maxHeight: Math.round(h * dpr), everyNthFrame: 1 }).catch((e) => log.warn('screencast failed', { error: e.message }));
+        await tab.cdp.send('Page.startScreencast', { format: 'jpeg', quality: this.quality, maxWidth: Math.round(w * dpr), maxHeight: Math.round(h * dpr), everyNthFrame: 1 }).catch((e) => log.warn('screencast failed', { error: e.message }));
     }
 
+    /**
+     * Frames: never queue. Each viewer has at most IN_FLIGHT frames on the way
+     * (the page acks each one it has drawn); a newer frame replaces one that
+     * is still waiting, so the picture is always the latest, never seconds old.
+     */
     onFrame(tab, f) {
         tab.cdp.send('Page.screencastFrameAck', { sessionId: f.sessionId }).catch(() => {});
         if (tab !== this.active) return;
         const buf = Buffer.from(f.data, 'base64');
         this.lastFrame = buf;
         for (const ws of this.viewers) {
-            // a slow connection skips frames instead of queueing them
-            if (ws.readyState === 1 && ws.bufferedAmount < 1.5 * 1024 * 1024) ws.send(buf, { binary: true });
+            const v = ws.__live;
+            if (ws.readyState !== 1 || !v) continue;
+            if (v.inFlight < IN_FLIGHT) this.push(ws, buf);
+            else {
+                if (v.pending) this.dropped += 1;
+                v.pending = buf;
+            }
+        }
+        this.tune();
+    }
+
+    push(ws, buf) {
+        ws.__live.inFlight += 1;
+        ws.__live.sentAt = Date.now();
+        ws.send(buf, { binary: true });
+    }
+
+    /** The page drew a frame: send the newest waiting one. */
+    ack(ws) {
+        const v = ws.__live;
+        if (!v) return;
+        v.inFlight = Math.max(0, v.inFlight - 1);
+        if (v.pending && ws.readyState === 1) {
+            const buf = v.pending;
+            v.pending = null;
+            this.push(ws, buf);
+        }
+    }
+
+    /** Slow link (many frames replaced) -> lower JPEG quality; smooth again -> back up. */
+    tune() {
+        const now = Date.now();
+        if (!this.tuneAt) this.tuneAt = now;
+        if (now - this.tuneAt < 2500) return;
+        const dropped = this.dropped || 0;
+        this.dropped = 0;
+        this.tuneAt = now;
+        const q = this.quality || QUALITY;
+        let next = q;
+        if (dropped > 8 && q > MIN_QUALITY) next = Math.max(MIN_QUALITY, q - 15);
+        else if (dropped === 0 && q < QUALITY) this.calm = (this.calm || 0) + 1;
+        if (dropped) this.calm = 0;
+        if (this.calm >= 3 && q < QUALITY) {
+            next = Math.min(QUALITY, q + 10);
+            this.calm = 0;
+        }
+        if (next !== q && this.active) {
+            this.quality = next;
+            this.startCast(this.active);
         }
     }
 
     async resize(size) {
         const w = Math.min(2560, Math.max(320, Math.round(Number(size.w) || 0)));
         const h = Math.min(2560, Math.max(320, Math.round(Number(size.h) || 0)));
-        const dpr = Math.min(2, Math.max(1, Number(size.dpr) || 1));
+        const dpr = Math.min(MAX_DPR, Math.max(1, Number(size.dpr) || 1));
         const mobile = !!size.mobile;
         const same = this.size.w === w && this.size.h === h && this.size.dpr === dpr && this.size.mobile === mobile;
         this.size = { w, h, dpr, mobile };
@@ -227,7 +308,7 @@ class UserBrowser {
     }
 
     sendState() {
-        if (!this.viewers.size) return;
+        if (!this.viewers.size || this.closing) return;
         clearTimeout(this.stateTimer);
         this.stateTimer = setTimeout(async () => {
             const s = this.state();
@@ -236,7 +317,7 @@ class UserBrowser {
                 s.title = await t.page.title().catch(() => '');
                 for (const tab of s.tabs) {
                     const x = this.tabs.find((y) => y.id === tab.id);
-                    tab.title = x === t ? s.title : await x.page.title().catch(() => '');
+                    tab.title = x === t ? s.title : x ? await x.page.title().catch(() => '') : '';
                 }
             }
             this.broadcast(s);
@@ -322,6 +403,7 @@ class UserBrowser {
                     modifiers: mods(msg)
                 }).catch(() => {});
                 if (msg.type === 'up') this.reportFocus(page);
+                if (msg.type === 'move' && !msg.buttons) this.reportCursor(page, num(msg.x), num(msg.y));
                 return;
             }
             case 'tap': {
@@ -362,6 +444,39 @@ class UserBrowser {
         }
     }
 
+    /** The mouse pointer the site shows there (link hand, text I-beam ...), at most ~8 times a second. */
+    reportCursor(page, x, y) {
+        this.cursorAt = { x, y };
+        if (this.cursorTimer) return;
+        this.cursorTimer = setTimeout(async () => {
+            this.cursorTimer = null;
+            const p = this.cursorAt;
+            const cursor = await page
+                .evaluate(
+                    ([px, py]) => {
+                        let el = document.elementFromPoint(px, py);
+                        while (el && el.shadowRoot) {
+                            const inner = el.shadowRoot.elementFromPoint(px, py);
+                            if (!inner || inner === el) break;
+                            el = inner;
+                        }
+                        if (!el) return 'default';
+                        const c = getComputedStyle(el).cursor;
+                        if (c && c !== 'auto') return c;
+                        if (el.closest('a[href],button,[role=button],label,summary,select')) return 'pointer';
+                        if (el.closest('input,textarea,[contenteditable=""],[contenteditable=true]')) return 'text';
+                        return 'default';
+                    },
+                    [p.x, p.y]
+                )
+                .catch(() => null);
+            if (cursor && cursor !== this.cursor) {
+                this.cursor = cursor;
+                this.broadcast({ t: 'cursor', value: cursor });
+            }
+        }, 120);
+    }
+
     /** After a click/tap: is the focus in a text field? (phones open their keyboard) */
     reportFocus(page) {
         clearTimeout(this.focusTimer);
@@ -384,9 +499,10 @@ class UserBrowser {
 
     // ----------------------------------------------------- viewers --
     attach(ws) {
+        ws.__live = { inFlight: 0, pending: null };
         this.viewers.add(ws);
         this.lastSeen = Date.now();
-        if (this.lastFrame) ws.send(this.lastFrame, { binary: true });
+        if (this.lastFrame) this.push(ws, this.lastFrame);
         this.sendState();
     }
 
@@ -522,6 +638,7 @@ async function connection(ws, user, params) {
             return;
         }
         if (!msg || typeof msg.t !== 'string') return;
+        if (msg.t === 'ack') return b && b.ack(ws); // frame drawn: not queued behind input
         if (!b) queue.push(msg);
         else run(msg);
     });
